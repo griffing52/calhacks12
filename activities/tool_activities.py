@@ -48,11 +48,12 @@ class ToolActivities:
         """
         DEPRECATED: This activity was part of the chat-based agent workflow.
         The application now focuses on voice calling with LiveKit/Twilio.
-        Raising an error if called.
+        Returns a valid result to maintain compatibility.
         """
-        raise ApplicationError(
-            "agent_validatePrompt is not supported. This application focuses on voice calling with LiveKit/Twilio.",
-            type="NotSupported",
+        # Return valid result - voice calling doesn't need validation
+        return ValidationResult(
+            validationResult=True,
+            validationFailedReason={},  # Empty dict, not string
         )
 
     @activity.defn
