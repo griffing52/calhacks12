@@ -61,6 +61,13 @@ class AgentGoalWorkflow:
             False  # set from env file in activity lookup_wf_env_settings
         )
         self.mcp_tools_info: Optional[dict] = None  # stores complete MCP tools result
+        
+        # Voice call specific state
+        self.voice_call_active: bool = False  # indicates an active voice call
+        self.voice_call_sid: Optional[str] = None  # Twilio Call SID for tracking
+        self.voice_call_status: str = "not_started"  # not_started, initiated, ringing, in_progress, completed, failed
+        self.voice_info_needed: bool = False  # indicates LiveKit AI needs info from user
+        self.voice_pending_question: Optional[str] = None  # question from LiveKit AI
 
     # see ../api/main.py#temporal_client.start_workflow() for how the input parameters are set
     @workflow.run
@@ -260,6 +267,135 @@ class AgentGoalWorkflow:
         workflow.logger.info("signal received: disable_debugging_confirm")
         self.enable_debugging_confirm = False
 
+    # ========== Voice Call Signals ==========
+    
+    @workflow.signal
+    async def call_update(self, status: str, message: str) -> None:
+        """
+        Signal handler for voice call status updates from external services (Twilio/LiveKit webhooks).
+        
+        Args:
+            status: Call status (e.g., "initiated", "ringing", "in_progress", "completed")
+            message: Human-readable status message
+        
+        Example:
+            await workflow_handle.signal("call_update", "ringing", "Call is ringing...")
+        """
+        workflow.logger.info(f"signal received: call_update, status={status}, message={message}")
+        
+        self.voice_call_status = status
+        
+        # Add update to conversation history
+        update_data = {
+            "status": status,
+            "message": message,
+            "call_sid": self.voice_call_sid,
+            "timestamp": workflow.now().isoformat()
+        }
+        self.add_message("voice_call_update", update_data)
+        
+        # Update active status based on call status
+        if status in ["completed", "failed", "no-answer", "busy", "canceled"]:
+            self.voice_call_active = False
+            workflow.logger.info(f"Voice call ended with status: {status}")
+        elif status in ["initiated", "ringing", "in_progress"]:
+            self.voice_call_active = True
+    
+    @workflow.signal
+    async def call_ended(self, reason: str, final_summary: str) -> None:
+        """
+        Signal handler for voice call termination.
+        
+        Args:
+            reason: Reason for call ending (e.g., "caller_hung_up", "goal_complete", "error")
+            final_summary: Summary of what was accomplished during the call
+        
+        Example:
+            await workflow_handle.signal("call_ended", "goal_complete", "Password successfully reset")
+        """
+        workflow.logger.info(f"signal received: call_ended, reason={reason}")
+        
+        self.voice_call_active = False
+        self.voice_call_status = "completed"
+        
+        # Add termination info to conversation history
+        end_data = {
+            "reason": reason,
+            "summary": final_summary,
+            "call_sid": self.voice_call_sid,
+            "timestamp": workflow.now().isoformat()
+        }
+        self.add_message("voice_call_ended", end_data)
+        
+        # Add a prompt to process the call completion
+        completion_prompt = f"###Voice call ended. Reason: {reason}. Summary: {final_summary}"
+        self.prompt_queue.append(completion_prompt)
+        
+        workflow.logger.info(f"Voice call completed: {final_summary}")
+    
+    @workflow.signal
+    async def required_info_needed(self, question: str) -> None:
+        """
+        Signal handler for when LiveKit AI needs additional information from the user.
+        
+        Args:
+            question: Question that needs to be answered by the user
+        
+        Example:
+            await workflow_handle.signal("required_info_needed", "What is your confirmation code?")
+        """
+        workflow.logger.info(f"signal received: required_info_needed, question={question}")
+        
+        self.voice_info_needed = True
+        self.voice_pending_question = question
+        
+        # Add the question to conversation history
+        question_data = {
+            "question": question,
+            "call_sid": self.voice_call_sid,
+            "timestamp": workflow.now().isoformat(),
+            "awaiting_response": True
+        }
+        self.add_message("voice_info_request", question_data)
+        
+        # Add a prompt to ask the user for the information
+        info_prompt = f"###The voice assistant needs additional information: {question}"
+        self.prompt_queue.append(info_prompt)
+        
+        workflow.logger.info(f"Voice AI needs info: {question}")
+    
+    @workflow.signal
+    async def voice_info_provided(self, answer: str) -> None:
+        """
+        Signal handler for when user provides requested information to the voice AI.
+        
+        Args:
+            answer: The user's answer to the pending question
+        
+        Example:
+            await workflow_handle.signal("voice_info_provided", "123456")
+        """
+        workflow.logger.info(f"signal received: voice_info_provided, answer provided")
+        
+        if not self.voice_info_needed:
+            workflow.logger.warning("Received voice_info_provided but no info was needed")
+            return
+        
+        self.voice_info_needed = False
+        
+        # Add the answer to conversation history
+        answer_data = {
+            "question": self.voice_pending_question,
+            "answer": answer,
+            "call_sid": self.voice_call_sid,
+            "timestamp": workflow.now().isoformat()
+        }
+        self.add_message("voice_info_response", answer_data)
+        
+        self.voice_pending_question = None
+        
+        workflow.logger.info("Voice info provided by user")
+
     @workflow.query
     def get_conversation_history(self) -> ConversationHistory:
         """Query handler to retrieve the full conversation history."""
@@ -280,6 +416,27 @@ class AgentGoalWorkflow:
     def get_latest_tool_data(self) -> Optional[ToolData]:
         """Query handler to retrieve the latest tool data response if available."""
         return self.tool_data
+
+    @workflow.query
+    def get_voice_call_status(self) -> Dict[str, Any]:
+        """
+        Query handler to retrieve current voice call status.
+        
+        Returns:
+            Dictionary containing:
+                - active: bool - Whether a voice call is currently active
+                - call_sid: str - Twilio Call SID (if available)
+                - status: str - Current call status
+                - info_needed: bool - Whether additional info is needed from user
+                - pending_question: str - Question awaiting answer (if any)
+        """
+        return {
+            "active": self.voice_call_active,
+            "call_sid": self.voice_call_sid,
+            "status": self.voice_call_status,
+            "info_needed": self.voice_info_needed,
+            "pending_question": self.voice_pending_question
+        }
 
     def add_message(self, actor: str, response: Union[str, Dict[str, Any]]) -> None:
         """Add a message to the conversation history.
@@ -368,6 +525,11 @@ class AgentGoalWorkflow:
         confirmed_tool_data["next"] = "user_confirmed_tool_run"
         self.add_message("user_confirmed_tool_run", confirmed_tool_data)
 
+        # Special handling for voice call initiation
+        if current_tool == "InitiateVoiceCall":
+            await self.execute_voice_call()
+            return waiting_for_confirm
+
         # execute the tool by key as defined in tools/__init__.py
         await helpers.handle_tool_execution(
             current_tool,
@@ -392,6 +554,69 @@ class AgentGoalWorkflow:
             ):
                 self.change_goal("goal_choose_agent_type")
         return waiting_for_confirm
+
+    async def execute_voice_call(self) -> None:
+        """
+        Execute voice call initiation and enter waiting state for call events.
+        
+        This method:
+        1. Executes the InitiateVoiceCall activity
+        2. Stores the Call SID for tracking
+        3. Sets voice_call_active = True
+        4. Waits for external signals (call_update, call_ended, required_info_needed)
+        """
+        workflow.logger.info("Executing voice call initiation")
+        
+        # Execute the voice call activity
+        await helpers.handle_tool_execution(
+            "InitiateVoiceCall",
+            self.tool_data,
+            self.tool_results,
+            self.add_message,
+            self.prompt_queue,
+            self.goal,
+        )
+        
+        # Extract call result
+        if len(self.tool_results) > 0:
+            call_result = self.tool_results[-1]
+            
+            if call_result.get("status") == "success":
+                self.voice_call_sid = call_result.get("call_sid")
+                self.voice_call_active = True
+                self.voice_call_status = "initiated"
+                
+                workflow.logger.info(
+                    f"Voice call initiated successfully. Call SID: {self.voice_call_sid}"
+                )
+                
+                # Add notification that we're waiting for call events
+                waiting_message = {
+                    "next": "question",
+                    "response": f"Voice call initiated to {self.tool_data.get('args', {}).get('phone_number')}. "
+                               f"Waiting for call to connect... You can track the call status or end this chat. "
+                               f"I'll update you when the call progresses or completes."
+                }
+                self.add_message("agent", waiting_message)
+                
+                # The workflow will continue running, waiting for signals:
+                # - call_update: for status updates
+                # - call_ended: for completion
+                # - required_info_needed: if LiveKit AI needs info
+                # - user_prompt: if user sends messages during the call
+                # - end_chat: if user ends the session
+                
+            else:
+                # Call initiation failed
+                error_message = call_result.get("error", "Unknown error")
+                workflow.logger.error(f"Voice call initiation failed: {error_message}")
+                
+                failure_response = {
+                    "next": "question",
+                    "response": f"Failed to initiate voice call: {error_message}. "
+                               f"Would you like to try again or get help another way?"
+                }
+                self.add_message("agent", failure_response)
 
     # debugging helper - drop this in various places in the workflow to get status
     # also don't forget you can look at the workflow itself and do queries if you want
