@@ -1,0 +1,19 @@
+# LiveKit Voice Agent Dependencies
+
+# Core LiveKit
+livekit>=0.17.0
+livekit-agents>=0.10.0
+
+# LLM Providers
+livekit-plugins-anthropic>=0.8.0
+livekit-plugins-openai>=0.8.0
+
+# Speech-to-Text Providers
+livekit-plugins-deepgram>=0.8.0
+
+# Text-to-Speech Providers  
+livekit-plugins-elevenlabs>=0.8.0
+
+# Utilities
+python-dotenv>=1.0.0
+httpx>=0.28.0
