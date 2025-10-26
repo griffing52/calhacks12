@@ -123,20 +123,13 @@ async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
         # Initialize Twilio client
         client = Client(twilio_account_sid, twilio_auth_token)
         
-        # Build webhook URL with metadata
+        # Build webhook URLs
         webhook_base_url = os.getenv("WEBHOOK_BASE_URL", "http://localhost:8000")
         status_callback_url = f"{webhook_base_url}/webhooks/twilio/status"
+        twiml_url = f"{webhook_base_url}/webhooks/twilio/voice"
         
-        import urllib.parse
-        query_params = urllib.parse.urlencode({
-            "goal": goal,
-            "context": context,
-            "livekit_url": livekit_url,
-            "livekit_api_key": livekit_api_key
-        })
-        twiml_url = f"{webhook_base_url}?{query_params}"
-        
-        activity.logger.info(f"Calling Twilio API with webhook URL: {webhook_base_url}")
+        activity.logger.info(f"Calling Twilio API with TwiML URL: {twiml_url}")
+        activity.logger.info(f"Status callback URL: {status_callback_url}")
         
         # Make the actual Twilio API call
         call = client.calls.create(
@@ -144,8 +137,9 @@ async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
             from_=twilio_phone_number,
             url=twiml_url,
             method="POST",
-            status_callback=os.getenv("VOICE_STATUS_CALLBACK_URL"),
-            status_callback_event=["initiated", "ringing", "answered", "completed"]
+            status_callback=status_callback_url,
+            status_callback_event=["initiated", "ringing", "answered", "completed"],
+            status_callback_method="POST"
         )
         
         activity.logger.info(

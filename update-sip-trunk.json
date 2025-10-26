@@ -1,0 +1,9 @@
+{
+  "sip_trunk_id": "ST_kngPd5bsM8U4",
+  "name": "Twilio Inbound Trunk",
+  "numbers": ["+13105825023"],
+  "allowed_addresses": [
+    "54.172.60.0/30",
+    "54.244.51.0/30"
+  ]
+}

@@ -103,7 +103,7 @@ def initiate_voice_call(args: Dict) -> Dict:
         # This should point to your server endpoint that serves TwiML
         # The endpoint will receive the goal and context as query parameters
         webhook_base_url = os.getenv(
-            "VOICE_WEBHOOK_BASE_URL",
+            "WEBHOOK_BASE_URL",
             "https://your-server.com/voice/twiml"
         )
         
@@ -115,7 +115,7 @@ def initiate_voice_call(args: Dict) -> Dict:
             "livekit_url": livekit_url,
             "livekit_api_key": livekit_api_key
         })
-        twiml_url = f"{webhook_base_url}?{query_params}"
+        twiml_url = f"{webhook_base_url}/webhooks/twilio/voice?{query_params}"
         
         # Initiate the outbound call
         call = client.calls.create(

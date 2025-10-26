@@ -20,9 +20,11 @@ try:
         AutoSubscribe,
         JobProcess,
     )
-    from livekit.agents.voice_assistant import VoiceAssistant
+    # Import the voice Agent (new API in livekit-agents 1.2+)
     from livekit.agents import llm, stt, tts
+    from livekit.agents.voice import Agent as VoiceAgent
     from livekit.plugins import openai
+    HAS_VOICE_ASSISTANT = True
 except ImportError as e:
     print(f"Error importing LiveKit dependencies: {e}")
     print("\nTo fix this, install the required packages:")
@@ -304,41 +306,58 @@ async def entrypoint(ctx: JobContext):
         except Exception as e:
             logger.error(f"Error processing data packet: {e}")
     
-    # Create and configure the LiveKit VoiceAssistant
-    assistant = VoiceAssistant(
-        vad=agents.stt.VAD.load(),  # Voice activity detection
-        stt=openai.STT(model="whisper-1"),  # Speech-to-text
-        llm=openai.LLM(model="gpt-4o"),  # Language model
-        tts=openai.TTS(voice="coral"),  # Text-to-speech
-        chat_ctx=llm.ChatContext().append(
-            role="system",
-            text=agent_manager.instructions
+    if HAS_VOICE_ASSISTANT:
+        # Build initial greeting
+        initial_greeting = f"Hello! This is an AI assistant calling on behalf of {user_name}. I am supposed to {goal}. Is now a good time to talk?"
+        
+        logger.info(f"Agent will greet with: {initial_greeting}")
+        
+        # Create the voice agent using the new API
+        # https://docs.livekit.io/agents/voice-agent/
+        assistant = VoiceAgent(
+            vad=agents.stt.VAD.load(),  # Voice activity detection
+            stt=openai.STT(model="whisper-1"),  # Speech-to-text
+            llm=openai.LLM(model="gpt-4o"),  # Language model
+            tts=openai.TTS(voice="coral"),  # Text-to-speech
+            instructions=agent_manager.instructions,  # System instructions
         )
-    )
-    
-    # Start the voice assistant
-    assistant.start(ctx.room)
-    
-    # Wait for participant to connect
-    await asyncio.sleep(1)
-    
-    # Generate the initial greeting
-    try:
-        greeting = f"""Start the conversation now. 
-
-Greet the person warmly, introduce yourself as an AI assistant calling on behalf of {user_name}.
-Explain the purpose of your call (goal: {goal}) and ask if now is a good time to talk.
-
-Keep your greeting natural, friendly, and professional. Get straight to the point but be personable."""
         
-        await assistant.say(greeting, allow_interruptions=True)
+        # Start the voice assistant
+        assistant.start(ctx.room)
         
-        agent_manager.conversation_started = True
-        logger.info("Initial greeting generated successfully")
+        logger.info("Voice agent started!")
         
-    except Exception as e:
-        logger.error(f"Error generating greeting: {e}")
-        await agent_manager.handle_error(f"Failed to start conversation: {str(e)}")
+        # Greet when participant connects
+        async def on_participant_connected(participant: rtc.RemoteParticipant):
+            """Greet when caller joins the room"""
+            if participant.identity.startswith("twilio-"):
+                logger.info(f"Twilio participant connected: {participant.identity}")
+                await asyncio.sleep(0.5)  # Brief delay for stability
+                await assistant.say(initial_greeting, allow_interruptions=True)
+                logger.info("✓ Agent greeted the caller!")
+        
+        ctx.room.on("participant_connected", on_participant_connected)
+        
+        logger.info("Agent ready and waiting for caller to connect...")
+        
+        # Keep running until call ends
+        await asyncio.sleep(3600)
+    else:
+        # Fallback: just log that we're ready
+        logger.warning("VoiceAgent not available - agent will not respond to audio")
+        logger.info(f"Agent ready for room {ctx.room.name}")
+        logger.info(f"Goal: {goal}")
+        logger.info(f"Context: {context}")
+        
+        # Keep the agent running
+        await asyncio.sleep(3600)  # Sleep for 1 hour
+    
+    # The assistant will automatically:
+    # - Detect when the user speaks (VAD)
+    # - Transcribe their speech (STT)
+    # - Generate a response using the LLM with the system instructions
+    # - Speak the response (TTS)
+    # - Continue the conversation until the call ends
 
 
 if __name__ == "__main__":
@@ -348,8 +367,7 @@ if __name__ == "__main__":
     agents.cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            # Configure worker options
-            num_idle_workers=1,  # Keep one worker ready
-            worker_type=agents.WorkerType.ROOM,
+            # Register with the agent name that matches the dispatch rule
+            agent_name="voice-assistant",
         )
     )

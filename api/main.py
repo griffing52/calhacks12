@@ -255,6 +255,7 @@ async def livekit_events(request: Request):
     """
     try:
         data = await request.json()
+        print(f"[LiveKit Webhook] Received event: {data}")
         
         call_sid = data.get("call_sid")
         event_type = data.get("event_type")
@@ -397,41 +398,55 @@ async def twilio_voice_twiml(
 ):
     """
     Twilio calls this endpoint when call connects.
-    Returns TwiML to connect to LiveKit.
+    Returns TwiML to forward call to LiveKit via SIP.
     """
     try:
-        # Get workflow info by Call SID
-        workflow_id = await get_workflow_id_by_call_sid(CallSid)
-        
-        # Get goal and context from workflow
-        if workflow_id:
-            handle = temporal_client.get_workflow_handle(workflow_id)
-            # Query workflow for goal/context (you'll need to add this query)
-            # call_info = await handle.query("get_voice_call_info")
-        
-        LIVEKIT_URL = os.getenv("LIVEKIT_URL", "your-livekit-server.com")
+        print(f"[TwiML-SIP] Generating TwiML for Call SID: {CallSid}, From: {From}")
 
-        # Generate TwiML that connects to LiveKit
+        # LiveKit SIP URI - build a full SIP URI that includes the phone number
+        # Use TLS transport to improve compatibility (Twilio -> LiveKit often requires TLS)
+        # Format: sip:+<phone_number>@<subdomain>.sip.livekit.cloud;transport=tls
+        livekit_url = os.getenv("LIVEKIT_URL", "wss://wait-less-22pf77bb.livekit.cloud")
+        # Extract subdomain: "wss://wait-less-22pf77bb.livekit.cloud" -> "22pf77bb"
+        subdomain = (
+            livekit_url.split("-")[-1].split(".")[0]
+            if "livekit.cloud" in livekit_url
+            else "22pf77bb"
+        )
+        twilio_phone = os.getenv("TWILIO_PHONE_NUMBER", "+13105825023")
+
+        # LiveKit SIP URI from project settings
+        # The SIP domain is DIFFERENT from the WebSocket subdomain!
+        # Must include phone number in SIP URI for LiveKit to route correctly
+        livekit_sip_uri = f"sip:{twilio_phone}@4uw4hf4g79e.sip.livekit.cloud"
+
+        print(f"[TwiML-SIP] Forwarding to LiveKit SIP URI: {livekit_sip_uri}")
+
+        # Generate TwiML to forward call to LiveKit SIP trunk
+        # Let LiveKit create the room automatically via dispatch rule
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-        <Response>
-            <Connect>
-                <Stream url="wss://{LIVEKIT_URL}/twilio">
-                    <Parameter name="call_sid" value="{CallSid}" />
-                    <Parameter name="goal" value="password_reset" />
-                    <Parameter name="context" value="user_needs_help" />
-                </Stream>
-            </Connect>
-        </Response>
-        """
-        
+<Response>
+    <Dial>
+        <Sip>{livekit_sip_uri}</Sip>
+    </Dial>
+</Response>"""
+
+        print(f"[TwiML-SIP] TwiML generated successfully")
         return Response(content=twiml, media_type="application/xml")
-    
+
     except Exception as e:
-        print(f"Error generating TwiML: {e}")
+        print(f"[TwiML-SIP] Error generating TwiML: {e}")
+        import traceback
+        traceback.print_exc()
+
         # Fallback TwiML
         return Response(
-            content='<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, an error occurred.</Say></Response>',
-            media_type="application/xml"
+            content="""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Sorry, an error occurred connecting to the assistant.</Say>
+    <Hangup/>
+</Response>""",
+            media_type="application/xml",
         )
 
 @app.post("/send-prompt")
@@ -575,7 +590,10 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
 
         # Create combined input with voice support goal
         combined_input = CombinedInput(
-            tool_params=AgentGoalWorkflowParams(None, None),
+            tool_params=AgentGoalWorkflowParams(
+                conversation_summary=None,
+                prompt_queue=None
+            ),
             agent_goal=goal_voice_support,
         )
 
