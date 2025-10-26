@@ -1,510 +1,355 @@
 """
-Production-Ready LiveKit Voice Agent
-Conducts intelligent conversations on behalf of users to complete goals.
+Production-ready LiveKit Voice Agent for Temporal AI Workflows
+Handles outbound voice calls on behalf of users to complete goals.
 """
 
 import asyncio
-import json
 import logging
 import os
-from typing import Dict, Any, Optional, List
+from typing import Optional, Dict, Any
 from datetime import datetime
 
-from livekit import agents, rtc
-from livekit.agents import llm, stt, tts, JobContext, WorkerOptions
-from livekit.plugins import anthropic, openai, deepgram, elevenlabs
-from dotenv import load_dotenv
 import httpx
+from dotenv import load_dotenv
 
-load_dotenv()
+try:
+    from livekit import agents, rtc
+    from livekit.agents import (
+        JobContext,
+        WorkerOptions,
+        AutoSubscribe,
+        JobProcess,
+    )
+    from livekit.agents.voice_assistant import VoiceAssistant
+    from livekit.agents import llm, stt, tts
+    from livekit.plugins import openai
+except ImportError as e:
+    print(f"Error importing LiveKit dependencies: {e}")
+    print("\nTo fix this, install the required packages:")
+    print("  Run from project root: uv sync")
+    print("\nThis will install:")
+    print("  - livekit")
+    print("  - livekit-agents")  
+    print("  - livekit-plugins-openai")
+    raise
+
+# Load environment variables
+load_dotenv("../.env")
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("voice-agent")
 
 
-class ConversationState:
-    """Tracks the state of the ongoing conversation."""
-    
-    def __init__(self, goal: str, context: str, user_name: str = "Griffin Galimi"):
-        self.goal = goal
-        self.context = context
-        self.user_name = user_name
-        self.conversation_history: List[Dict[str, str]] = []
-        self.required_info: Dict[str, Any] = {}
-        self.info_requested: Dict[str, bool] = {}
-        self.goal_status = "in_progress"  # in_progress, waiting_for_info, completed, failed
-        self.start_time = datetime.now()
-        self.call_sid: Optional[str] = None
-        self.workflow_id: Optional[str] = None
-    
-    def add_message(self, role: str, content: str):
-        """Add a message to conversation history."""
-        self.conversation_history.append({
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat()
-        })
-    
-    def mark_info_requested(self, info_key: str):
-        """Mark that we've requested specific information."""
-        self.info_requested[info_key] = True
-    
-    def has_requested(self, info_key: str) -> bool:
-        """Check if we've already requested this information."""
-        return self.info_requested.get(info_key, False)
-    
-    def set_info(self, key: str, value: Any):
-        """Store required information when received."""
-        self.required_info[key] = value
-        logger.info(f"Stored info: {key} = {value}")
-    
-    def get_summary(self) -> Dict[str, Any]:
-        """Generate a summary of the conversation."""
-        return {
-            "goal": self.goal,
-            "status": self.goal_status,
-            "duration_seconds": (datetime.now() - self.start_time).total_seconds(),
-            "messages_exchanged": len(self.conversation_history),
-            "required_info": self.required_info,
-            "call_sid": self.call_sid,
-            "workflow_id": self.workflow_id
-        }
-
-
-class VoiceAgent(agents.VoiceAgent):
+class TemporalVoiceAgent:
     """
-    Production-ready voice agent that conducts conversations on behalf of users.
+    AI Voice Assistant that conducts conversations on behalf of the user.
     
     Features:
-    - Intelligent goal-oriented conversations
-    - Information gathering from call recipients
-    - Integration with Temporal workflows
-    - Real-time data exchange with web UI
-    - Comprehensive error handling
-    - Conversation state management
+    - Goal-oriented conversations
+    - Context-aware responses
+    - Information collection and validation
+    - Error handling and graceful failures
+    - Integration with Temporal workflows via webhooks
     """
-    
+
     def __init__(
         self,
+        call_sid: str,
         goal: str,
         context: str,
         user_name: str = "Griffin Galimi",
-        call_sid: Optional[str] = None,
-        workflow_id: Optional[str] = None,
-        webhook_url: Optional[str] = None
-    ):
+        webhook_url: Optional[str] = None,
+    ) -> None:
         """
-        Initialize the voice agent.
+        Initialize the voice assistant.
         
         Args:
-            goal: The objective to accomplish (e.g., "Schedule a meeting")
-            context: Additional context about the task
-            user_name: Name of the user the agent represents
-            call_sid: Twilio Call SID for this call
-            workflow_id: Temporal workflow ID for this call
-            webhook_url: URL to send events back to the system
+            call_sid: Twilio Call SID for tracking
+            goal: The objective of the call (e.g., "schedule appointment")
+            context: Additional context about the situation
+            user_name: Name of the person the agent is calling on behalf of
+            webhook_url: URL to send events back to Temporal workflow
         """
-        # Initialize LLM (prefer Claude for conversational abilities)
-        llm_provider = os.getenv("AGENT_LLM_PROVIDER", "anthropic")
-        
-        if llm_provider == "anthropic":
-            agent_llm = anthropic.LLM(
-                model="claude-3-5-sonnet-20241022",
-                temperature=0.7,  # Balanced creativity and consistency
-            )
-        else:
-            agent_llm = openai.LLM(
-                model="gpt-4o",
-                temperature=0.7,
-            )
-        
-        # Initialize STT (Speech-to-Text)
-        agent_stt = deepgram.STT(
-            model="nova-2-general",
-            language="en-US",
-            smart_format=True,
-            punctuate=True
-        )
-        
-        # Initialize TTS (Text-to-Speech)
-        tts_provider = os.getenv("AGENT_TTS_PROVIDER", "elevenlabs")
-        
-        if tts_provider == "elevenlabs":
-            agent_tts = elevenlabs.TTS(
-                voice="Sarah",  # Professional, friendly voice
-                model="eleven_turbo_v2",
-            )
-        else:
-            agent_tts = openai.TTS(
-                voice="nova",
-                model="tts-1",
-            )
-        
-        super().__init__(
-            llm=agent_llm,
-            stt=agent_stt,
-            tts=agent_tts
-        )
-        
-        # Initialize conversation state
-        self.state = ConversationState(goal, context, user_name)
-        self.state.call_sid = call_sid
-        self.state.workflow_id = workflow_id
+        self.call_sid = call_sid
+        self.goal = goal
+        self.context = context
+        self.user_name = user_name
         self.webhook_url = webhook_url or os.getenv("WEBHOOK_BASE_URL", "http://localhost:8000")
         
-        # System prompt that guides the agent's behavior
-        self.system_prompt = self._build_system_prompt()
+        # Conversation state
+        self.conversation_started = False
+        self.information_collected: Dict[str, Any] = {}
+        self.requires_user_input = False
+        self.pending_question: Optional[str] = None
         
-        logger.info(f"Agent initialized for goal: {goal}")
-    
-    def _build_system_prompt(self) -> str:
-        """Build the system prompt that defines the agent's behavior."""
-        return f"""You are an AI assistant making a phone call on behalf of {self.state.user_name}.
+        # Build dynamic instructions based on goal and context
+        self.instructions = self._build_instructions()
+        
+        logger.info(
+            f"TemporalVoiceAgent initialized - Call SID: {call_sid}, "
+            f"Goal: {goal}, User: {user_name}"
+        )
 
-YOUR GOAL: {self.state.goal}
+    def _build_instructions(self) -> str:
+        """Build dynamic instructions for the AI based on goal and context."""
+        return f"""You are a professional AI assistant calling on behalf of {self.user_name}.
 
-CONTEXT: {self.state.context}
+GOAL: {self.goal}
 
-YOUR ROLE:
-- You are professional, courteous, and efficient
-- You represent {self.state.user_name} and speak on their behalf
-- Your job is to accomplish the goal by having a natural conversation
-- Be concise but thorough - phone conversations should be efficient
-- Listen carefully and ask clarifying questions when needed
+CONTEXT: {self.context}
 
-CONVERSATION GUIDELINES:
-1. **Introduction**: Start by introducing yourself as {self.state.user_name}'s assistant
-2. **Purpose**: Clearly state the reason for the call (the goal)
-3. **Information Gathering**: Ask for necessary information to complete the goal
-4. **Confirmation**: Confirm important details before completing the task
-5. **Closure**: Thank the person and confirm next steps before ending
+PERSONALITY & STYLE:
+- Professional, friendly, and confident
+- Speak naturally and conversationally
+- Use the caller's name if they provide it
+- Be concise but thorough
+- Show empathy and understanding
 
-IMPORTANT BEHAVIORS:
-- If you need specific information (account numbers, confirmation codes, etc.), ask clearly
-- If the person seems confused, rephrase or provide more context
-- If you can't complete the goal (wrong department, etc.), politely ask to be transferred
-- If the task is complete, clearly confirm what was accomplished
-- Be patient and understanding if the person needs to look something up
+CONVERSATION FLOW:
+1. Greet the person warmly and introduce yourself
+2. Explain you're calling on behalf of {self.user_name}
+3. State the purpose of your call clearly (the goal)
+4. Listen carefully to their responses
+5. Collect any necessary information
+6. Handle objections gracefully
+7. Confirm next steps before ending
 
-INFORMATION HANDLING:
-- When you receive important information (numbers, dates, names), repeat it back for confirmation
-- If you need the web UI to provide information, you can request it (it will be sent to you)
-- Keep track of what information you've gathered
+IMPORTANT RULES:
+- If you need information that only {self.user_name} has (like confirmation codes, passwords, account numbers), 
+  say "I need to get that information from {self.user_name}. One moment please."
+- Never make up information you don't have
+- If the person is busy, offer to call back at a better time
+- Be respectful if they decline or hang up
+- Stay focused on the goal but be flexible in how you achieve it
 
-Remember: You're making this call to help {self.state.user_name}. Be professional and get the job done!"""
-    
-    async def on_call_start(self, ctx: JobContext):
+INFORMATION TO COLLECT (if relevant to the goal):
+- Person's name and contact information
+- Availability for appointments/meetings
+- Specific requirements or preferences
+- Any concerns or questions they have
+- Confirmation that the goal was achieved
+
+Remember: You represent {self.user_name} professionally. Make them proud!"""
+
+    async def send_webhook_event(
+        self, 
+        event_type: str, 
+        data: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """
-        Called when the call starts. Initialize and greet the call recipient.
-        """
-        logger.info(f"Call started - Goal: {self.state.goal}")
+        Send event to Temporal workflow via webhook.
         
-        # Extract room and participant
-        room = ctx.room
-        
-        # Store room for later use
-        self.room = room
-        self.ctx = ctx
-        
-        # Listen for data messages from the web UI
-        room.on("data_received", self._on_data_received)
-        
-        # Build personalized greeting
-        greeting = self._build_greeting()
-        
-        # Add to conversation history
-        self.state.add_message("assistant", greeting)
-        
-        # Speak the greeting
-        await self.say(greeting)
-        
-        # Send initial status to webhook
-        await self._send_webhook_event("call_started", {
-            "goal": self.state.goal,
-            "greeting": greeting
-        })
-    
-    def _build_greeting(self) -> str:
-        """Build an appropriate greeting based on the goal."""
-        base_greeting = f"Hello! This is an assistant calling on behalf of {self.state.user_name}."
-        
-        # Add goal-specific context
-        if "schedule" in self.state.goal.lower() or "meeting" in self.state.goal.lower():
-            purpose = f"I'm calling to schedule a meeting. {self.state.context}"
-        elif "password" in self.state.goal.lower() or "reset" in self.state.goal.lower():
-            purpose = f"I'm calling to help with a password reset. {self.state.context}"
-        elif "appointment" in self.state.goal.lower():
-            purpose = f"I'm calling to book an appointment. {self.state.context}"
-        elif "cancel" in self.state.goal.lower():
-            purpose = f"I'm calling to cancel a service. {self.state.context}"
-        elif "support" in self.state.goal.lower():
-            purpose = f"I'm calling regarding a support request. {self.state.context}"
-        else:
-            purpose = f"I'm calling about: {self.state.goal}. {self.state.context}"
-        
-        return f"{base_greeting} {purpose} Do you have a moment to help with this?"
-    
-    async def _on_data_received(self, data: rtc.DataPacket):
-        """
-        Handle data messages from the web UI.
-        This allows the user to provide information via text instead of voice.
-        """
-        try:
-            message = data.data.decode('utf-8')
-            logger.info(f"Received data from web UI: {message}")
+        Args:
+            event_type: Type of event (e.g., "agent_needs_info", "call_complete")
+            data: Additional event data
             
-            # Try to parse as JSON (structured data)
-            try:
-                data_obj = json.loads(message)
-                
-                # Handle different types of data
-                if data_obj.get("type") == "info":
-                    # Store the information
-                    key = data_obj.get("key", "additional_info")
-                    value = data_obj.get("value")
-                    self.state.set_info(key, value)
-                    
-                    # Acknowledge to the person on the call
-                    ack = f"Thank you, I've received that information: {value}"
-                    await self.say(ack)
-                    self.state.add_message("assistant", ack)
-                
-                elif data_obj.get("type") == "instruction":
-                    # User wants to give the agent specific instructions
-                    instruction = data_obj.get("instruction")
-                    logger.info(f"Received instruction: {instruction}")
-                    # Process instruction...
-            
-            except json.JSONDecodeError:
-                # Plain text message
-                self.state.set_info("user_provided_text", message)
-                
-                # Acknowledge in the conversation
-                ack = f"I've received some information to share: {message}"
-                await self.say(ack)
-                self.state.add_message("assistant", ack)
-        
-        except Exception as e:
-            logger.error(f"Error handling data message: {e}")
-    
-    async def handle_speech(self, transcript: str):
+        Returns:
+            True if webhook sent successfully, False otherwise
         """
-        Handle speech from the call recipient.
-        This is the main conversation loop.
-        """
-        logger.info(f"Received speech: {transcript}")
-        
-        # Add to conversation history
-        self.state.add_message("user", transcript)
-        
-        # Analyze the response and determine next action
-        response = await self._generate_response(transcript)
-        
-        # Check if we need information from the web UI
-        if self._needs_web_ui_info(transcript, response):
-            await self._request_info_from_web_ui(transcript)
-            # Continue with temporary response
-            temp_response = "Let me check on that information for you. One moment please."
-            await self.say(temp_response)
-            self.state.add_message("assistant", temp_response)
-            return
-        
-        # Check if goal is complete
-        if self._is_goal_complete(transcript, response):
-            self.state.goal_status = "completed"
-            await self._send_webhook_event("call_complete", self.state.get_summary())
-        
-        # Speak the response
-        await self.say(response)
-        self.state.add_message("assistant", response)
-    
-    async def _generate_response(self, user_input: str) -> str:
-        """
-        Generate an appropriate response using the LLM.
-        """
-        # Build conversation context
-        conversation = [
-            {"role": "system", "content": self.system_prompt}
-        ]
-        
-        # Add recent conversation history (last 10 messages)
-        recent_history = self.state.conversation_history[-10:]
-        for msg in recent_history:
-            conversation.append({
-                "role": msg["role"],
-                "content": msg["content"]
-            })
-        
-        # Add current user input if not already in history
-        conversation.append({
-            "role": "user",
-            "content": user_input
-        })
-        
-        # Generate response using LLM
         try:
-            response = await self.llm.chat(conversation)
-            return response.content
-        except Exception as e:
-            logger.error(f"Error generating response: {e}")
-            return "I apologize, I'm having trouble processing that. Could you please repeat?"
-    
-    def _needs_web_ui_info(self, user_input: str, response: str) -> bool:
-        """
-        Determine if we need information from the web UI.
-        """
-        # Keywords that indicate we need user-provided information
-        info_keywords = [
-            "confirmation code",
-            "account number",
-            "password",
-            "security code",
-            "verification",
-            "reference number"
-        ]
-        
-        user_lower = user_input.lower()
-        response_lower = response.lower()
-        
-        # Check if the conversation mentions these topics
-        for keyword in info_keywords:
-            if keyword in user_lower or keyword in response_lower:
-                # Check if we haven't already requested this
-                if not self.state.has_requested(keyword):
-                    return True
-        
-        return False
-    
-    async def _request_info_from_web_ui(self, context: str):
-        """
-        Send a request to the web UI asking the user to provide information.
-        """
-        # Extract what information we need
-        question = f"The agent needs additional information: {context}"
-        
-        await self._send_webhook_event("agent_needs_info", {
-            "question": question,
-            "context": context
-        })
-        
-        # Mark that we've requested this
-        self.state.mark_info_requested(context)
-    
-    def _is_goal_complete(self, user_input: str, response: str) -> bool:
-        """
-        Determine if the goal has been completed.
-        """
-        completion_indicators = [
-            "confirmed",
-            "scheduled",
-            "completed",
-            "done",
-            "all set",
-            "taken care of",
-            "processed",
-            "approved"
-        ]
-        
-        combined = (user_input + " " + response).lower()
-        
-        # Check for completion indicators
-        for indicator in completion_indicators:
-            if indicator in combined:
-                return True
-        
-        return False
-    
-    async def _send_webhook_event(self, event_type: str, data: Dict[str, Any]):
-        """
-        Send an event back to the Temporal workflow via webhook.
-        """
-        if not self.webhook_url:
-            logger.warning("No webhook URL configured, skipping event send")
-            return
-        
-        try:
-            payload = {
-                "call_sid": self.state.call_sid,
-                "workflow_id": self.state.workflow_id,
+            event_data = {
+                "call_sid": self.call_sid,
                 "event_type": event_type,
-                **data
+                "timestamp": datetime.utcnow().isoformat(),
+                **(data or {})
             }
             
             webhook_endpoint = f"{self.webhook_url}/webhooks/livekit/events"
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
                     webhook_endpoint,
-                    json=payload,
-                    timeout=5.0
+                    json=event_data
                 )
                 
                 if response.status_code == 200:
-                    logger.info(f"Webhook sent: {event_type}")
+                    logger.info(f"Webhook sent successfully: {event_type}")
+                    return True
                 else:
-                    logger.warning(f"Webhook failed: {response.status_code}")
-        
+                    logger.warning(
+                        f"Webhook returned {response.status_code}: {response.text}"
+                    )
+                    return False
+                    
         except Exception as e:
-            logger.error(f"Error sending webhook: {e}")
-    
-    async def on_call_end(self):
+            logger.error(f"Failed to send webhook: {e}")
+            return False
+
+    async def request_user_information(self, question: str) -> None:
         """
-        Called when the call ends. Send final summary.
+        Request information from the user via the web UI.
+        
+        Args:
+            question: The question to ask the user
         """
-        logger.info("Call ended")
+        self.requires_user_input = True
+        self.pending_question = question
         
-        # Generate final summary
-        summary = self.state.get_summary()
+        logger.info(f"Requesting user input: {question}")
         
-        # Send to webhook
-        await self._send_webhook_event("call_ended", summary)
+        await self.send_webhook_event(
+            "agent_needs_info",
+            {
+                "question": question,
+                "goal": self.goal,
+                "context": self.context
+            }
+        )
+
+    async def handle_user_response(self, answer: str) -> None:
+        """
+        Handle response from user via web UI.
+        
+        Args:
+            answer: The user's answer to the pending question
+        """
+        if self.pending_question:
+            logger.info(f"Received user answer: {answer}")
+            self.information_collected[self.pending_question] = answer
+            self.requires_user_input = False
+            self.pending_question = None
+
+    async def complete_call(
+        self, 
+        success: bool, 
+        summary: str,
+        collected_info: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Mark the call as complete and send results to workflow.
+        
+        Args:
+            success: Whether the goal was achieved
+            summary: Summary of what happened on the call
+            collected_info: Any information collected during the call
+        """
+        logger.info(f"Call completing - Success: {success}, Summary: {summary}")
+        
+        await self.send_webhook_event(
+            "call_complete",
+            {
+                "success": success,
+                "summary": summary,
+                "goal": self.goal,
+                "information_collected": collected_info or self.information_collected,
+                "requires_followup": self.requires_user_input
+            }
+        )
+
+    async def handle_error(self, error: str) -> None:
+        """
+        Handle and report errors during the call.
+        
+        Args:
+            error: Description of the error
+        """
+        logger.error(f"Call error: {error}")
+        
+        await self.send_webhook_event(
+            "call_error",
+            {
+                "error": error,
+                "goal": self.goal
+            }
+        )
 
 
 async def entrypoint(ctx: JobContext):
     """
-    Entry point for the LiveKit agent.
-    This is called when a new call is connected.
+    Main entrypoint for the LiveKit agent.
+    
+    Extracts goal and context from room metadata and conducts the conversation.
     """
-    logger.info("Agent entrypoint called")
+    logger.info(f"Agent starting for room: {ctx.room.name}")
     
-    # Extract call information from room metadata
-    room = ctx.room
-    metadata = json.loads(room.metadata) if room.metadata else {}
+    # Extract metadata from room (passed from Twilio TwiML)
+    metadata = ctx.room.metadata or "{}"
+    import json
+    try:
+        room_data = json.loads(metadata) if isinstance(metadata, str) else metadata
+    except json.JSONDecodeError:
+        room_data = {}
     
-    goal = metadata.get("goal", "General support call")
-    context = metadata.get("context", "")
-    user_name = metadata.get("user_name", "Griffin Galimi")
-    call_sid = metadata.get("call_sid")
-    workflow_id = metadata.get("workflow_id")
+    # Get call parameters
+    call_sid = room_data.get("call_sid", ctx.room.name.replace("call-", ""))
+    goal = room_data.get("goal", "assist the caller")
+    context = room_data.get("context", "")
+    user_name = room_data.get("user_name", os.getenv("USER_NAME", "Griffin Galimi"))
     
-    logger.info(f"Starting agent for goal: {goal}")
+    logger.info(f"Call parameters - SID: {call_sid}, Goal: {goal}")
     
-    # Create and run the agent
-    agent = VoiceAgent(
+    # Create the voice assistant manager
+    agent_manager = TemporalVoiceAgent(
+        call_sid=call_sid,
         goal=goal,
         context=context,
         user_name=user_name,
-        call_sid=call_sid,
-        workflow_id=workflow_id
     )
     
-    # Connect the agent to the room
-    await agent.connect(room)
+    # Set up data channel listener for web UI messages
+    @ctx.room.on("data_received")
+    def on_data_received(data: rtc.DataPacket):
+        """Handle data messages from the web UI (via send_info_to_livekit)."""
+        try:
+            message = data.data.decode("utf-8")
+            logger.info(f"Received data from web UI: {message}")
+            
+            # If we're waiting for user input, process it
+            if agent_manager.requires_user_input:
+                asyncio.create_task(agent_manager.handle_user_response(message))
+        except Exception as e:
+            logger.error(f"Error processing data packet: {e}")
     
-    # Wait for the call to end
-    await agent.wait_for_completion()
+    # Create and configure the LiveKit VoiceAssistant
+    assistant = VoiceAssistant(
+        vad=agents.stt.VAD.load(),  # Voice activity detection
+        stt=openai.STT(model="whisper-1"),  # Speech-to-text
+        llm=openai.LLM(model="gpt-4o"),  # Language model
+        tts=openai.TTS(voice="coral"),  # Text-to-speech
+        chat_ctx=llm.ChatContext().append(
+            role="system",
+            text=agent_manager.instructions
+        )
+    )
+    
+    # Start the voice assistant
+    assistant.start(ctx.room)
+    
+    # Wait for participant to connect
+    await asyncio.sleep(1)
+    
+    # Generate the initial greeting
+    try:
+        greeting = f"""Start the conversation now. 
+
+Greet the person warmly, introduce yourself as an AI assistant calling on behalf of {user_name}.
+Explain the purpose of your call (goal: {goal}) and ask if now is a good time to talk.
+
+Keep your greeting natural, friendly, and professional. Get straight to the point but be personable."""
+        
+        await assistant.say(greeting, allow_interruptions=True)
+        
+        agent_manager.conversation_started = True
+        logger.info("Initial greeting generated successfully")
+        
+    except Exception as e:
+        logger.error(f"Error generating greeting: {e}")
+        await agent_manager.handle_error(f"Failed to start conversation: {str(e)}")
 
 
 if __name__ == "__main__":
-    # Run the agent worker
-    logger.info("Starting LiveKit Voice Agent Worker")
+    # Run the agent
+    logger.info("Starting LiveKit Voice Agent worker...")
     
     agents.cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
+            # Configure worker options
+            num_idle_workers=1,  # Keep one worker ready
+            worker_type=agents.WorkerType.ROOM,
         )
     )

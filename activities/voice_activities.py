@@ -4,8 +4,7 @@ Handles voice call initiation via Twilio and LiveKit integration
 """
 
 import os
-import random
-import string
+import uuid
 from typing import Dict, Any
 
 from dotenv import load_dotenv
@@ -91,18 +90,19 @@ async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
             f"Would call {phone_number} for goal: {goal}"
         )
         
-        # Generate a mock Call SID
-        mock_call_sid = "CA" + ''.join(random.choices(string.hexdigits.lower(), k=32))
+        # Generate a fake Call SID using uuid
+        fake_sid = f"CA{uuid.uuid4().hex[:32]}"
         
         # Print stub message as requested
         stub_message = f"Calling {phone_number} to fulfill goal: {goal}"
         activity.logger.info(stub_message)
         print(f"[STUB] {stub_message}")
         
+        # Return Call SID immediately so workflow can track it
         return {
             "status": "success",
-            "call_sid": mock_call_sid,
-            "message": f"[STUB MODE] {stub_message}",
+            "call_sid": fake_sid,  # Important!
+            "message": f"[STUB] Calling {phone_number}...",
             "phone_number": phone_number,
             "goal": goal,
             "context": context,
@@ -124,10 +124,8 @@ async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
         client = Client(twilio_account_sid, twilio_auth_token)
         
         # Build webhook URL with metadata
-        webhook_base_url = os.getenv(
-            "VOICE_WEBHOOK_BASE_URL",
-            "https://your-server.com/voice/twiml"
-        )
+        webhook_base_url = os.getenv("WEBHOOK_BASE_URL", "http://localhost:8000")
+        status_callback_url = f"{webhook_base_url}/webhooks/twilio/status"
         
         import urllib.parse
         query_params = urllib.parse.urlencode({
@@ -154,10 +152,11 @@ async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
             f"Successfully initiated call. Call SID: {call.sid}, Status: {call.status}"
         )
         
+        # Return Call SID immediately so workflow can track it
         return {
             "status": "success",
-            "call_sid": call.sid,
-            "message": f"Voice call initiated successfully to {phone_number}",
+            "call_sid": call.sid,  # Important!
+            "message": f"Voice call initiated to {phone_number}",
             "phone_number": phone_number,
             "goal": goal,
             "context": context,
@@ -181,6 +180,7 @@ async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
             "message": f"Failed to initiate voice call: {str(e)}",
             "error_type": type(e).__name__
         }
+    
 
 
 # Alias for backward compatibility with the existing tool implementation

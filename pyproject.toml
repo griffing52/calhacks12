@@ -22,6 +22,16 @@ dependencies = [
     "stripe>=11.4.1,<12",
     "gtfs-kit>=10.1.1,<11",
     "fastmcp>=2.7.0,<3",
+    "httpx>=0.28.1,<0.29",
+    "livekit>=0.17.0",
+    "livekit-agents>=0.10.0",
+    "livekit-plugins-openai>=0.7.0",
+]
+
+[project.optional-dependencies]
+voice = [
+    "twilio>=9.0.0,<10",
+    "livekit-api>=0.6.0,<1",
 ]
 
 [project.urls]

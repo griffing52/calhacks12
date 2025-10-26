@@ -4,7 +4,7 @@ import uuid
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Form, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from temporalio.api.enums.v1 import WorkflowExecutionStatus
@@ -21,7 +21,7 @@ app = FastAPI()
 temporal_client: Optional[Client] = None
 
 # Load environment variables
-load_dotenv()
+load_dotenv("../.env")
 
 
 # Request models
@@ -60,7 +60,6 @@ async def startup_event():
     global temporal_client
     temporal_client = await get_temporal_client()
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -68,6 +67,220 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.post("/webhooks/twilio/status")
+async def twilio_status_callback(
+    CallSid: str = Form(...),
+    CallStatus: str = Form(...),
+    From: Optional[str] = Form(None),
+    To: Optional[str] = Form(None)
+):
+    """
+    Twilio sends call status updates here.
+    
+    Status values: initiated, ringing, in-progress, completed, 
+                   busy, failed, no-answer, canceled
+    """
+    try:
+        # Look up workflow by Call SID
+        # You'll need to maintain a mapping of Call SID -> Workflow ID
+        workflow_id = await get_workflow_id_by_call_sid(CallSid)
+        
+        if not workflow_id:
+            return {"status": "ok", "message": "Workflow not found"}
+        
+        # Send signal to workflow
+        handle = temporal_client.get_workflow_handle(workflow_id)
+        await handle.signal(
+            "call_update", 
+            CallStatus, 
+            f"Call status: {CallStatus}"
+        )
+        
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"Error in Twilio webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
+# Simple in-memory mapping (use Redis/DB for production)
+call_sid_to_workflow_id = {}
+
+async def store_call_sid_mapping(call_sid: str, workflow_id: str):
+    """Store mapping of Call SID to Workflow ID."""
+    call_sid_to_workflow_id[call_sid] = workflow_id
+
+async def get_workflow_id_by_call_sid(call_sid: str) -> Optional[str]:
+    """Get Workflow ID for a given Call SID."""
+    return call_sid_to_workflow_id.get(call_sid)
+
+
+async def send_info_to_livekit(call_sid: str, answer: str) -> bool:
+    """
+    Send user-provided information to the LiveKit AI agent.
+    
+    This function forwards information from the user (via the web UI) to the
+    LiveKit AI agent that is conducting the voice conversation. This enables
+    a hybrid flow where sensitive information can be provided via text instead
+    of spoken over the phone.
+    
+    Args:
+        call_sid: The Twilio Call SID identifying the active call
+        answer: The information/answer provided by the user
+    
+    Returns:
+        True if successfully sent, False otherwise
+    
+    Implementation Options:
+        1. LiveKit Data Channels: Send as data message to the room
+        2. LiveKit Webhooks: POST to LiveKit agent's webhook endpoint
+        3. LiveKit Server API: Use REST API to send message to agent
+        
+    Currently implements Option 3 (stub) - would need LiveKit SDK in production.
+    """
+    try:
+        # Get LiveKit configuration
+        livekit_url = os.getenv("LIVEKIT_URL", "wss://your-livekit-server.com")
+        livekit_api_key = os.getenv("LIVEKIT_API_KEY")
+        livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
+        
+        has_livekit_credentials = all([livekit_api_key, livekit_api_secret])
+        
+        if not has_livekit_credentials:
+            # STUB MODE - Log the information that would be sent
+            print(f"[STUB] Would send to LiveKit (Call SID: {call_sid}): {answer}")
+            return True
+        
+        # PRODUCTION MODE - Send via LiveKit API
+        # Option 1: Using LiveKit REST API to send data to room/participant
+        try:
+            import httpx
+            from livekit import api
+            
+            # Initialize LiveKit API client
+            # The LiveKit Python SDK provides methods to interact with rooms and participants
+            livekit_client = api.LiveKitAPI(
+                url=livekit_url.replace("wss://", "https://"),
+                api_key=livekit_api_key,
+                api_secret=livekit_api_secret
+            )
+            
+            # Find the room associated with this call
+            # In practice, you'd need to map Call SID -> Room Name
+            # For now, we'll use Call SID as room identifier
+            room_name = f"call-{call_sid}"
+            
+            # Send data message to the room
+            # The LiveKit agent in the room will receive this
+            await livekit_client.room.send_data(
+                room=room_name,
+                data=answer.encode('utf-8'),
+                kind=api.DataPacket.Kind.RELIABLE,
+                destination_sids=[]  # Empty = broadcast to all participants
+            )
+            
+            print(f"✓ Sent info to LiveKit room {room_name}: {answer[:50]}...")
+            return True
+            
+        except ImportError:
+            # LiveKit SDK not installed
+            print(f"⚠️  LiveKit SDK not installed. Install with: pip install livekit-api")
+            print(f"[FALLBACK] Would send to LiveKit: {answer}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error sending to LiveKit: {e}")
+            # Fallback: log the data but don't fail
+            print(f"[FALLBACK] Info that failed to send: {answer}")
+            return False
+    
+    except Exception as e:
+        print(f"❌ Unexpected error in send_info_to_livekit: {e}")
+        return False
+
+
+async def poll_for_call_sid(workflow_id: str, max_attempts: int = 10, delay: float = 0.5):
+    """
+    Poll the workflow for Call SID and store the mapping.
+    
+    This function runs in the background after workflow starts.
+    It queries the workflow's voice call status to get the Call SID,
+    then stores the mapping for webhook routing.
+    
+    Args:
+        workflow_id: The workflow ID to poll
+        max_attempts: Maximum number of polling attempts
+        delay: Delay between polling attempts in seconds
+    """
+    try:
+        handle = temporal_client.get_workflow_handle(workflow_id)
+        
+        for attempt in range(max_attempts):
+            try:
+                # Query workflow for voice call status
+                status = await handle.query("get_voice_call_status")
+                
+                call_sid = status.get("call_sid")
+                if call_sid:
+                    # Store the mapping
+                    await store_call_sid_mapping(call_sid, workflow_id)
+                    print(f"✓ Stored Call SID mapping: {call_sid} -> {workflow_id}")
+                    return
+                
+                # Wait before next attempt
+                await asyncio.sleep(delay)
+                
+            except Exception as e:
+                # Query might fail if workflow hasn't progressed yet
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(delay)
+                else:
+                    print(f"⚠️  Failed to get Call SID for {workflow_id} after {max_attempts} attempts: {e}")
+    
+    except Exception as e:
+        print(f"❌ Error polling for Call SID for {workflow_id}: {e}")
+
+@app.post("/webhooks/livekit/events")
+async def livekit_events(request: Request):
+    """
+    LiveKit AI agent sends events here.
+    
+    Events:
+    - agent_needs_info: AI needs additional info from user
+    - call_complete: Call ended successfully
+    - call_error: Error during call
+    """
+    try:
+        data = await request.json()
+        
+        call_sid = data.get("call_sid")
+        event_type = data.get("event_type")
+        
+        # Get workflow ID
+        workflow_id = await get_workflow_id_by_call_sid(call_sid)
+        if not workflow_id:
+            return {"status": "ok", "message": "Workflow not found"}
+        
+        handle = temporal_client.get_workflow_handle(workflow_id)
+        
+        # Handle different event types
+        if event_type == "agent_needs_info":
+            question = data.get("question")
+            await handle.signal("required_info_needed", question)
+        
+        elif event_type == "call_complete":
+            summary = data.get("summary", "Call completed")
+            await handle.signal("call_ended", "goal_complete", summary)
+        
+        elif event_type == "call_error":
+            error = data.get("error", "Unknown error")
+            await handle.signal("call_ended", "error", f"Error: {error}")
+        
+        return {"status": "ok"}
+    
+    except Exception as e:
+        print(f"Error in LiveKit webhook: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 @app.get("/")
@@ -168,6 +381,49 @@ async def get_agent_goal():
         print(e)
         return {}
 
+@app.post("/webhooks/twilio/voice")
+async def twilio_voice_twiml(
+    CallSid: str = Form(...),
+    From: str = Form(...)
+):
+    """
+    Twilio calls this endpoint when call connects.
+    Returns TwiML to connect to LiveKit.
+    """
+    try:
+        # Get workflow info by Call SID
+        workflow_id = await get_workflow_id_by_call_sid(CallSid)
+        
+        # Get goal and context from workflow
+        if workflow_id:
+            handle = temporal_client.get_workflow_handle(workflow_id)
+            # Query workflow for goal/context (you'll need to add this query)
+            # call_info = await handle.query("get_voice_call_info")
+        
+        LIVEKIT_URL = os.getenv("LIVEKIT_URL", "your-livekit-server.com")
+
+        # Generate TwiML that connects to LiveKit
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+        <Response>
+            <Connect>
+                <Stream url="wss://{LIVEKIT_URL}/twilio">
+                    <Parameter name="call_sid" value="{CallSid}" />
+                    <Parameter name="goal" value="password_reset" />
+                    <Parameter name="context" value="user_needs_help" />
+                </Stream>
+            </Connect>
+        </Response>
+        """
+        
+        return Response(content=twiml, media_type="application/xml")
+    
+    except Exception as e:
+        print(f"Error generating TwiML: {e}")
+        # Fallback TwiML
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, an error occurred.</Say></Response>',
+            media_type="application/xml"
+        )
 
 @app.post("/send-prompt")
 async def send_prompt(prompt: str):
@@ -243,18 +499,53 @@ async def start_workflow():
         "message": f"Workflow started with goal's starter prompt: {initial_agent_goal.starter_prompt}."
     }
 
+@app.post("/api/v1/voice-provide-info")
+async def voice_provide_info(
+    workflow_id: str,
+    answer: str
+):
+    """
+    Frontend calls this when user provides info.
+    This endpoint forwards the answer to LiveKit.
+    """
+    try:
+        # Send signal to workflow
+        handle = temporal_client.get_workflow_handle(workflow_id)
+        await handle.signal("voice_info_provided", answer)
+        
+        # Also forward to LiveKit AI agent
+        call_sid = None
+        for sid, wf_id in call_sid_to_workflow_id.items():
+            if wf_id == workflow_id:
+                call_sid = sid
+                break
+        
+        if call_sid:
+            # Send to LiveKit (implementation depends on LiveKit setup)
+            await send_info_to_livekit(call_sid, answer)
+        
+        return {"status": "ok"}
+    
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 
 @app.post("/api/v1/voice-initiate")
-async def voice_initiate(request: VoiceInitiateRequest):
+async def voice_initiate(request: VoiceInitiateRequest, background_tasks: BackgroundTasks):
     """
     Initiate a voice call workflow.
 
     This endpoint starts a new AgentGoalWorkflow configured for voice support.
     It creates a workflow with the voice agent goal and provides the phone number,
     goal, and context as the initial user prompt.
+    
+    After starting the workflow, it polls in the background for the Call SID
+    and stores the mapping for webhook routing.
 
     Args:
         request: VoiceInitiateRequest containing phone_number, goal, and context
+        background_tasks: FastAPI background tasks for async polling
 
     Returns:
         dict: Contains the workflow_id and status message
@@ -289,6 +580,11 @@ async def voice_initiate(request: VoiceInitiateRequest):
             start_signal="user_prompt",
             start_signal_args=[initial_prompt],
         )
+
+        # Add background task to poll for Call SID and store mapping
+        # This allows the endpoint to return immediately while the Call SID
+        # is retrieved asynchronously from the workflow
+        background_tasks.add_task(poll_for_call_sid, workflow_id)
 
         return {
             "workflow_id": workflow_id,

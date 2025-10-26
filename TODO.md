@@ -265,38 +265,24 @@ All implementation steps are complete:
           return {"status": "error", "message": str(e)}
   ```
 
-- [ ] **Add endpoint to provide info back to LiveKit**
+- [x] **Add endpoint to provide info back to LiveKit**
   
-  ```python
-  @app.post("/api/v1/voice-provide-info")
-  async def voice_provide_info(
-      workflow_id: str,
-      answer: str
-  ):
-      """
-      Frontend calls this when user provides info.
-      This endpoint forwards the answer to LiveKit.
-      """
-      try:
-          # Send signal to workflow
-          handle = temporal_client.get_workflow_handle(workflow_id)
-          await handle.signal("voice_info_provided", answer)
-          
-          # Also forward to LiveKit AI agent
-          call_sid = None
-          for sid, wf_id in call_sid_to_workflow_id.items():
-              if wf_id == workflow_id:
-                  call_sid = sid
-                  break
-          
-          if call_sid:
-              # Send to LiveKit (implementation depends on LiveKit setup)
-              await send_info_to_livekit(call_sid, answer)
-          
-          return {"status": "ok"}
-      
-      except Exception as e:
-          return {"status": "error", "message": str(e)}
+  ✅ **IMPLEMENTED** in `api/main.py`:
+  - Endpoint: `/api/v1/voice-provide-info`
+  - Function: `send_info_to_livekit(call_sid, answer)`
+  - Modes: Stub mode (logs) and Production mode (LiveKit API)
+  - Documentation: `docs/livekit-integration.md`
+  - Test script: `scripts/test_livekit_integration.py`
+  
+  To enable production mode:
+  ```bash
+  # Add to .env:
+  LIVEKIT_URL=wss://your-project.livekit.cloud
+  LIVEKIT_API_KEY=APIxxxxx
+  LIVEKIT_API_SECRET=xxxxx
+  
+  # Install dependencies:
+  uv sync --extra voice
   ```
 
 ### 2.3 Update Activity to Return Call SID

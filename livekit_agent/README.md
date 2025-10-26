@@ -51,22 +51,19 @@ cp .env.example .env
 
 2. Configure your API keys:
 ```bash
-# Required: LLM Provider
-ANTHROPIC_API_KEY=sk-ant-xxxxx
-# or
+# Required: LLM Provider (OpenAI for Realtime API)
 OPENAI_API_KEY=sk-xxxxx
-
-# Required: Speech Services
-DEEPGRAM_API_KEY=xxxxx
-ELEVENLABS_API_KEY=xxxxx
 
 # Required: LiveKit
 LIVEKIT_URL=wss://your-project.livekit.cloud
 LIVEKIT_API_KEY=APIxxxxx
 LIVEKIT_API_SECRET=xxxxx
 
-# Required: Webhook
+# Required: Webhook (for Temporal integration)
 WEBHOOK_BASE_URL=https://your-api.com
+
+# Optional: User name (defaults to "Griffin Galimi")
+USER_NAME=Griffin Galimi
 ```
 
 ## Usage
@@ -77,8 +74,9 @@ WEBHOOK_BASE_URL=https://your-api.com
 # Start the LiveKit agent worker
 python agent.py
 
-# Or with uv
-uv run python agent.py
+# Or with uv (from parent directory)
+cd ..
+uv run python livekit_agent/agent.py
 ```
 
 The agent will:
