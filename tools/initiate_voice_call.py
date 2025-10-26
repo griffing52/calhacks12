@@ -1,6 +1,9 @@
 """
 Voice call initiation tool using Twilio and LiveKit.
 This tool initiates an outbound voice call to assist with customer support.
+
+This is a synchronous wrapper around the Temporal activity for compatibility
+with the dynamic tool execution system.
 """
 
 import os
@@ -12,6 +15,10 @@ from dotenv import load_dotenv
 def initiate_voice_call(args: Dict) -> Dict:
     """
     Initiate a voice call using Twilio and LiveKit.
+    
+    This function serves as a synchronous wrapper that is called by the
+    dynamic_tool_activity. The actual implementation is in activities/voice_activities.py
+    which is registered as a Temporal activity.
     
     Args:
         args: Dictionary containing:
@@ -26,6 +33,10 @@ def initiate_voice_call(args: Dict) -> Dict:
             - call_sid: str - Unique identifier for the call (Twilio Call SID)
             - message: str - Human-readable status message
             - error: str - Error message if status is "error"
+    
+    Note:
+        When called from a Temporal workflow, this delegates to the activity.
+        When called standalone (e.g., in tests), it executes directly.
     """
     load_dotenv(override=True)
     

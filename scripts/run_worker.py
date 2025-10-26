@@ -11,6 +11,7 @@ from activities.tool_activities import (
     dynamic_tool_activity,
     mcp_list_tools,
 )
+from activities.voice_activities import initiate_voice_call_activity
 from shared.config import TEMPORAL_TASK_QUEUE, get_temporal_client
 from shared.mcp_client_manager import MCPClientManager
 from workflows.agent_goal_workflow import AgentGoalWorkflow
@@ -74,6 +75,7 @@ async def main():
                     activities.mcp_tool_activity,
                     dynamic_tool_activity,
                     mcp_list_tools,
+                    initiate_voice_call_activity,
                 ],
                 activity_executor=activity_executor,
             )
