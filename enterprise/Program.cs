@@ -18,7 +18,7 @@ var loggerFactory = LoggerFactory.Create(builder =>
 // Add HTTP client
 services.AddHttpClient("TrainApi", client =>
 {
-    client.BaseAddress = new Uri("http://localhost:8080/");
+    client.BaseAddress = new Uri("http://localhost:8081/");
     client.DefaultRequestHeaders.Add("Accept", "application/json");
 });
 

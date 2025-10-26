@@ -9,6 +9,7 @@ from goals.food import food_goals
 from goals.hr import hr_goals
 from goals.stripe_mcp import mcp_goals
 from goals.travel import travel_goals
+from goals.voice_agent import voice_goals
 from models.tool_definitions import AgentGoal
 
 goal_list: List[AgentGoal] = []
@@ -19,6 +20,7 @@ goal_list.extend(finance_goals)
 goal_list.extend(ecommerce_goals)
 goal_list.extend(mcp_goals)
 goal_list.extend(food_goals)
+goal_list.extend(voice_goals)
 
 # for multi-goal, just set list agents as the last tool
 first_goal_value = os.getenv("AGENT_GOAL")

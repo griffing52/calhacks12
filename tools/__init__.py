@@ -15,6 +15,7 @@ from .hr.book_pto import book_pto
 from .hr.checkpaybankstatus import checkpaybankstatus
 from .hr.current_pto import current_pto
 from .hr.future_pto_calc import future_pto_calc
+from .initiate_voice_call import initiate_voice_call
 from .list_agents import list_agents
 from .search_fixtures import search_fixtures
 from .search_flights import search_flights
@@ -69,5 +70,7 @@ def get_handler(tool_name: str):
         return guess_location
     if tool_name == "AddToCart":
         return add_to_cart
+    if tool_name == "InitiateVoiceCall":
+        return initiate_voice_call
 
     raise ValueError(f"Unknown tool: {tool_name}")

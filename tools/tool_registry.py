@@ -434,6 +434,35 @@ food_add_to_cart_tool = ToolDefinition(
     ],
 )
 
+# ----- Voice Support Use Case Tools -----
+initiate_voice_call_tool = ToolDefinition(
+    name="InitiateVoiceCall",
+    description="Initiate a voice call to the user's phone number using Twilio and LiveKit for customer support. "
+    "The call will be handled by an AI voice agent that can assist with the user's goal.",
+    arguments=[
+        ToolArgument(
+            name="phone_number",
+            type="string",
+            description="Phone number to call in E.164 format (e.g., +14155551234)",
+        ),
+        ToolArgument(
+            name="goal",
+            type="string",
+            description="The purpose or goal of the call (e.g., 'password reset', 'account help', 'technical support')",
+        ),
+        ToolArgument(
+            name="context",
+            type="string",
+            description="Additional context about the user's issue or request to help the voice agent provide better support",
+        ),
+        ToolArgument(
+            name="userConfirmation",
+            type="string",
+            description="Indication of user's desire to receive a voice call",
+        ),
+    ],
+)
+
 # MCP Integration Functions
 
 

@@ -149,7 +149,7 @@ You can also run a local Temporal server using Docker Compose. See the `Developm
   ```
 
 Default urls:
-* Temporal UI: [http://localhost:8080](http://localhost:8080)
+* Temporal UI: [http://localhost:8081](http://localhost:8081)
 * API: [http://localhost:8000](http://localhost:8000)
 * Frontend: [http://localhost:5173](http://localhost:5173)
 
@@ -260,7 +260,7 @@ Required to search and book trains!
 uv run thirdparty/train_api.py
 
 # example url
-# http://localhost:8080/api/search?from=london&to=liverpool&outbound_time=2025-04-18T09:00:00&inbound_time=2025-04-20T09:00:00
+# http://localhost:8081/api/search?from=london&to=liverpool&outbound_time=2025-04-18T09:00:00&inbound_time=2025-04-20T09:00:00
 ```
 
  ##### Python Train Legacy Worker

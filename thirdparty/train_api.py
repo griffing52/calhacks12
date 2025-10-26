@@ -207,8 +207,8 @@ class TrainServer(BaseHTTPRequestHandler):
 
 
 def run_server():
-    server = HTTPServer(("", 8080), TrainServer)
-    print("Train booking server starting on port 8080...")
+    server = HTTPServer(("", 8081), TrainServer)
+    print("Train booking server starting on port 8081...")
     server.serve_forever()
 
 
