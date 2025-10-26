@@ -131,5 +131,64 @@ export const apiService = {
                 error.status || 500
             );
         }
+    },
+
+    async initiateVoiceCall({ phoneNumber, goal, context }) {
+        if (!phoneNumber?.trim()) {
+            throw new ApiError('Phone number is required', 400);
+        }
+        if (!goal?.trim()) {
+            throw new ApiError('Goal is required', 400);
+        }
+        if (!context?.trim()) {
+            throw new ApiError('Context is required', 400);
+        }
+
+        try {
+            const res = await fetchWithTimeout(
+                `${API_BASE_URL}/api/v1/voice-initiate`,
+                { 
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        phone_number: phoneNumber,
+                        goal: goal,
+                        context: context
+                    })
+                }
+            );
+            return handleResponse(res);
+        } catch (error) {
+            if (error instanceof ApiError) {
+                throw error;
+            }
+            throw new ApiError(
+                'Failed to initiate voice call',
+                error.status || 500
+            );
+        }
+    },
+
+    async getVoiceCallStatus(workflowId) {
+        if (!workflowId?.trim()) {
+            throw new ApiError('Workflow ID is required', 400);
+        }
+
+        try {
+            const res = await fetchWithTimeout(
+                `${API_BASE_URL}/voice-call-status/${workflowId}`
+            );
+            return handleResponse(res);
+        } catch (error) {
+            if (error instanceof ApiError) {
+                throw error;
+            }
+            throw new ApiError(
+                'Failed to get voice call status',
+                error.status || 500
+            );
+        }
     }
 }; 
