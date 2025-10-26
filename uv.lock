@@ -1460,12 +1460,14 @@ dependencies = [
     { name = "httpx" },
     { name = "livekit" },
     { name = "livekit-agents" },
+    { name = "livekit-api" },
     { name = "livekit-plugins-openai" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "temporalio" },
+    { name = "twilio" },
     { name = "uvicorn" },
 ]
 
@@ -1491,6 +1493,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "livekit", specifier = ">=0.17.0" },
     { name = "livekit-agents", specifier = ">=0.10.0" },
+    { name = "livekit-api", specifier = ">=0.6.0,<1" },
     { name = "livekit-api", marker = "extra == 'voice'", specifier = ">=0.6.0,<1" },
     { name = "livekit-plugins-openai", specifier = ">=0.7.0" },
     { name = "python-dotenv", specifier = ">=1.0.1,<2" },
@@ -1498,6 +1501,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
     { name = "requests", specifier = ">=2.32.3,<3" },
     { name = "temporalio", specifier = ">=1.8.0,<2" },
+    { name = "twilio", specifier = ">=9.0.0,<10" },
     { name = "twilio", marker = "extra == 'voice'", specifier = ">=9.0.0,<10" },
     { name = "uvicorn", specifier = ">=0.34.0,<0.35" },
 ]

@@ -32,38 +32,26 @@ async function handleResponse(response) {
 }
 
 async function fetchWithTimeout(url, options = {}, timeout = REQUEST_TIMEOUT_MS) {
-    console.log('[fetchWithTimeout] Starting fetch to:', url);
-    console.log('[fetchWithTimeout] Timeout:', timeout, 'ms');
-    console.log('[fetchWithTimeout] Options:', options);
     
     const controller = new AbortController();
     const startTime = Date.now();
     const timeoutId = setTimeout(() => {
         const elapsed = Date.now() - startTime;
-        console.error('[fetchWithTimeout] ⏰ TIMEOUT! Aborting after', elapsed, 'ms');
         controller.abort();
     }, timeout);
 
     try {
-        console.log('[fetchWithTimeout] Calling fetch...');
         const response = await fetch(url, { ...options, signal: controller.signal });
         const elapsed = Date.now() - startTime;
-        console.log('[fetchWithTimeout] ✓ Fetch completed in', elapsed, 'ms');
         return response;
     } catch (error) {
-        const elapsed = Date.now() - startTime;
-        console.error('[fetchWithTimeout] ✗ Fetch error after', elapsed, 'ms');
-        console.error('[fetchWithTimeout] Error name:', error.name);
-        console.error('[fetchWithTimeout] Error:', error);
-        
+    
         if (error.name === 'AbortError') {
-            console.error('[fetchWithTimeout] Request was aborted (timeout)');
             throw new ApiError('Request timed out', 408);
         }
         throw error;
     } finally {
         clearTimeout(timeoutId);
-        console.log('[fetchWithTimeout] Timeout cleared');
     }
 }
 

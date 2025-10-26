@@ -568,20 +568,16 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
     """
     import time
     start_time = time.time()
-    print(f"[VOICE-INITIATE] Starting voice_initiate endpoint at {start_time}")
-    print(f"[VOICE-INITIATE] Request: phone={request.phone_number}, goal={request.goal}, context={request.context}")
-    
+   
     try:
         # Generate a unique workflow ID for this voice call
         workflow_id = f"voice-call-{uuid.uuid4()}"
-        print(f"[VOICE-INITIATE] Generated workflow_id: {workflow_id} (elapsed: {time.time() - start_time:.3f}s)")
 
         # Create combined input with voice support goal
         combined_input = CombinedInput(
             tool_params=AgentGoalWorkflowParams(None, None),
             agent_goal=goal_voice_support,
         )
-        print(f"[VOICE-INITIATE] Created combined_input (elapsed: {time.time() - start_time:.3f}s)")
 
         # Construct the initial prompt with all the information
         # This prompt will guide the agent to collect any missing info and initiate the call
@@ -590,10 +586,8 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
             f"with goal: {request.goal} "
             f"and context: {request.context}"
         )
-        print(f"[VOICE-INITIATE] Constructed initial_prompt (elapsed: {time.time() - start_time:.3f}s)")
 
         # Start the workflow with the voice support goal and initial prompt
-        print(f"[VOICE-INITIATE] About to call temporal_client.start_workflow (elapsed: {time.time() - start_time:.3f}s)")
         await temporal_client.start_workflow(
             AgentGoalWorkflow.run,
             combined_input,
@@ -602,13 +596,11 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
             start_signal="user_prompt",
             start_signal_args=[initial_prompt],
         )
-        print(f"[VOICE-INITIATE] Workflow started successfully (elapsed: {time.time() - start_time:.3f}s)")
 
         # Add background task to poll for Call SID and store mapping
         # This allows the endpoint to return immediately while the Call SID
         # is retrieved asynchronously from the workflow
         background_tasks.add_task(poll_for_call_sid, workflow_id)
-        print(f"[VOICE-INITIATE] Added background task (elapsed: {time.time() - start_time:.3f}s)")
 
         response = {
             "workflow_id": workflow_id,
@@ -617,13 +609,11 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
             "goal": request.goal,
             "context": request.context,
         }
-        print(f"[VOICE-INITIATE] Returning response (elapsed: {time.time() - start_time:.3f}s)")
         return response
 
     except TemporalError as e:
         elapsed = time.time() - start_time
         error_message = str(e)
-        print(f"[VOICE-INITIATE] ❌ TemporalError after {elapsed:.3f}s: {error_message}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to initiate voice call workflow: {error_message}",
@@ -631,7 +621,6 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
     except Exception as e:
         elapsed = time.time() - start_time
         error_message = str(e)
-        print(f"[VOICE-INITIATE] ❌ Unexpected error after {elapsed:.3f}s: {error_message}")
         raise HTTPException(
             status_code=500,
             detail=f"Unexpected error: {error_message}",
