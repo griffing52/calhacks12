@@ -1,29 +1,77 @@
-from .change_goal import change_goal
-from .create_invoice import create_invoice
-from .ecommerce.get_order import get_order
-from .ecommerce.list_orders import list_orders
-from .ecommerce.track_package import track_package
-from .fin.check_account_valid import check_account_valid
-from .fin.get_account_balances import get_account_balance
-from .fin.move_money import move_money
-from .fin.submit_loan_application import submit_loan_application
-from .find_events import find_events
-from .food.add_to_cart import add_to_cart
-from .give_hint import give_hint
-from .guess_location import guess_location
-from .hr.book_pto import book_pto
-from .hr.checkpaybankstatus import checkpaybankstatus
-from .hr.current_pto import current_pto
-from .hr.future_pto_calc import future_pto_calc
+# Voice-focused imports - only import what's needed for voice calling
 from .initiate_voice_call import initiate_voice_call
-from .list_agents import list_agents
-from .search_fixtures import search_fixtures
-from .search_flights import search_flights
-from .search_trains import book_trains, search_trains
-from .transfer_control import transfer_control
+
+# Conditional imports for other tools (only if dependencies are available)
+try:
+    from .change_goal import change_goal
+    from .create_invoice import create_invoice
+    from .ecommerce.get_order import get_order
+    from .ecommerce.list_orders import list_orders
+    from .ecommerce.track_package import track_package
+    from .fin.check_account_valid import check_account_valid
+    from .fin.get_account_balances import get_account_balance
+    from .fin.move_money import move_money
+    from .fin.submit_loan_application import submit_loan_application
+    from .find_events import find_events
+    from .food.add_to_cart import add_to_cart
+    from .give_hint import give_hint
+    from .guess_location import guess_location
+    from .hr.book_pto import book_pto
+    from .hr.checkpaybankstatus import checkpaybankstatus
+    from .hr.current_pto import current_pto
+    from .hr.future_pto_calc import future_pto_calc
+    from .list_agents import list_agents
+    from .search_fixtures import search_fixtures
+    from .search_flights import search_flights
+    from .search_trains import book_trains, search_trains
+    from .transfer_control import transfer_control
+    
+    _FULL_TOOLS_AVAILABLE = True
+except ImportError as e:
+    print(f"Note: Some tools unavailable due to missing dependencies: {e}")
+    print("Voice calling functionality will still work.")
+    _FULL_TOOLS_AVAILABLE = False
+    # Stub out missing tools
+    change_goal = None
+    create_invoice = None
+    get_order = None
+    list_orders = None
+    track_package = None
+    check_account_valid = None
+    get_account_balance = None
+    move_money = None
+    submit_loan_application = None
+    find_events = None
+    add_to_cart = None
+    give_hint = None
+    guess_location = None
+    book_pto = None
+    checkpaybankstatus = None
+    current_pto = None
+    future_pto_calc = None
+    list_agents = None
+    search_fixtures = None
+    search_flights = None
+    search_trains = None
+    book_trains = None
+    transfer_control = None
 
 
 def get_handler(tool_name: str):
+    """Get handler for a tool by name. Raises ValueError if tool not found or unavailable."""
+    # Voice calling tool (always available)
+    if tool_name == "InitiateVoiceCall":
+        return initiate_voice_call
+    
+    # Check if full tools are available
+    if not _FULL_TOOLS_AVAILABLE:
+        raise ValueError(
+            f"Tool '{tool_name}' is not available. "
+            "This application is configured for voice calling only. "
+            "Install additional dependencies (pandas, stripe, etc.) to enable other tools."
+        )
+    
+    # Other tools (require additional dependencies)
     if tool_name == "SearchFixtures":
         return search_fixtures
     if tool_name == "SearchFlights":
@@ -70,7 +118,5 @@ def get_handler(tool_name: str):
         return guess_location
     if tool_name == "AddToCart":
         return add_to_cart
-    if tool_name == "InitiateVoiceCall":
-        return initiate_voice_call
 
     raise ValueError(f"Unknown tool: {tool_name}")

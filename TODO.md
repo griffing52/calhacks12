@@ -546,6 +546,7 @@ This is the most complex part - integrating LiveKit AI agent.
 - [ ] **Terminal 3: Start Temporal Worker**
   ```bash
   cd /home/griffing52/calhacks/calhacks12
+  sudo chown -R $USER:$USER .venv
   uv run python scripts/run_worker.py
   
   # Should see:
