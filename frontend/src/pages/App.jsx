@@ -41,8 +41,8 @@ export default function App() {
     const [error, setError] = useState(INITIAL_ERROR_STATE);
     const [done, setDone] = useState(true);
     
-    // Voice call mode state
-    const [voiceMode, setVoiceMode] = useState(false);
+    // Voice call mode state - START IN VOICE MODE BY DEFAULT
+    const [voiceMode, setVoiceMode] = useState(true);
     const [voiceWorkflowId, setVoiceWorkflowId] = useState(null);
     const [voiceCallStatus, setVoiceCallStatus] = useState(null);
 
@@ -141,12 +141,19 @@ export default function App() {
         }
     }, [handleError, clearErrorOnSuccess]);
     
-    // Setup polling with cleanup
+    // Setup polling with cleanup - Only poll when we have an active voice workflow
     useEffect(() => {
-        pollingRef.current = setInterval(fetchConversationHistory, POLL_INTERVAL);
+        // Only poll if we have a voice workflow and are not in voice mode
+        if (voiceWorkflowId && !voiceMode) {
+            pollingRef.current = setInterval(fetchConversationHistory, POLL_INTERVAL);
+        }
         
-        return () => clearInterval(pollingRef.current);
-    }, [fetchConversationHistory]);
+        return () => {
+            if (pollingRef.current) {
+                clearInterval(pollingRef.current);
+            }
+        };
+    }, [fetchConversationHistory, voiceWorkflowId, voiceMode]);
     
 
     const scrollToBottom = useCallback(() => {
@@ -284,38 +291,55 @@ export default function App() {
     };
 
     return (
-        <div className="flex flex-col h-screen">
-            <NavBar title="Temporal AI Agent 🤖" />
+        <div className="flex flex-col h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
+            <NavBar title="🎙️ AI Voice Assistant - Powered by Twilio & LiveKit" />
 
             {error.visible && (
                 <div className="fixed top-16 left-1/2 transform -translate-x-1/2 
-                    bg-red-500 text-white px-4 py-2 rounded shadow-lg z-50 
-                    transition-opacity duration-300">
-                    {error.message}
+                    bg-red-500 text-white px-6 py-3 rounded-lg shadow-xl z-50 
+                    transition-all duration-300 animate-slide-down">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xl">⚠️</span>
+                        <span>{error.message}</span>
+                    </div>
                 </div>
             )}
 
-            <div className="flex-grow flex justify-center px-4 py-2 overflow-hidden">
-                <div className="w-full max-w-lg bg-white dark:bg-gray-900 p-8 px-3 rounded shadow-md 
-                    flex flex-col overflow-hidden">
+            <div className="flex-grow flex justify-center px-4 py-6 overflow-hidden">
+                <div className="w-full max-w-2xl bg-white dark:bg-gray-900 p-8 rounded-xl shadow-2xl 
+                    flex flex-col overflow-hidden border border-gray-200 dark:border-gray-700">
                     
-                    {/* Voice Mode Toggle Button */}
-                    {done && !voiceWorkflowId && (
-                        <div className="mb-4 text-center">
+                    {/* Main Header */}
+                    <div className="text-center mb-6">
+                        <h1 className="text-3xl font-bold text-gray-800 dark:text-white mb-2">
+                            {voiceMode ? '📞 Make a Voice Call' : '💬 Call Status'}
+                        </h1>
+                        <p className="text-gray-600 dark:text-gray-400">
+                            {voiceMode 
+                                ? 'Our AI assistant will call on your behalf to complete your goal' 
+                                : 'Track your voice call in real-time'}
+                        </p>
+                    </div>
+
+                    {/* Voice Mode Toggle - More Prominent */}
+                    {!voiceWorkflowId && (
+                        <div className="mb-6">
                             <button
                                 onClick={handleToggleVoiceMode}
-                                className={`px-4 py-2 rounded-md font-medium transition-all duration-200
+                                className={`w-full px-6 py-4 rounded-lg font-semibold text-lg
+                                    transition-all duration-300 transform hover:scale-105
+                                    shadow-md hover:shadow-lg
                                     ${voiceMode 
-                                        ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600' 
-                                        : 'bg-green-600 text-white hover:bg-green-700'
+                                        ? 'bg-gradient-to-r from-gray-600 to-gray-700 text-white hover:from-gray-700 hover:to-gray-800' 
+                                        : 'bg-gradient-to-r from-green-500 to-green-600 text-white hover:from-green-600 hover:to-green-700'
                                     }`}
                             >
-                                {voiceMode ? '💬 Switch to Chat' : '📞 Start Voice Call'}
+                                {voiceMode ? '� View Call History' : '🎙️ Make New Voice Call'}
                             </button>
                         </div>
                     )}
 
-                    {/* Conditional rendering: Voice Form or Chat Window */}
+                    {/* Conditional rendering: Voice Form or Call Status */}
                     {voiceMode ? (
                         <div className="flex-grow flex items-center justify-center">
                             <VoiceCallForm 
@@ -327,88 +351,76 @@ export default function App() {
                     ) : (
                         <>
                             <div ref={containerRef} 
-                                className="flex-grow overflow-y-auto pb-20 pt-10 scroll-smooth">
-                                <ChatWindow
-                                    conversation={conversation}
-                                    loading={loading}
-                                    onConfirm={handleConfirm}
-                                    onContentChange={handleContentChange}
-                                />
-                                {done && (
-                                    <div className="text-center text-sm text-gray-500 dark:text-gray-400 mt-4 
-                                        animate-fade-in">
-                                        Chat ended
+                                className="flex-grow overflow-y-auto pb-4 scroll-smooth
+                                    border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-800">
+                                
+                                {/* Show call status or history */}
+                                {conversation.length === 0 ? (
+                                    <div className="text-center py-12">
+                                        <div className="text-6xl mb-4">📞</div>
+                                        <h3 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                                            No Active Calls
+                                        </h3>
+                                        <p className="text-gray-500 dark:text-gray-400">
+                                            Click "Make New Voice Call" above to get started
+                                        </p>
                                     </div>
+                                ) : (
+                                    <>
+                                        <ChatWindow
+                                            conversation={conversation}
+                                            loading={loading}
+                                            onConfirm={handleConfirm}
+                                            onContentChange={handleContentChange}
+                                        />
+                                        {done && (
+                                            <div className="text-center text-sm text-gray-500 dark:text-gray-400 mt-4 
+                                                p-3 bg-gray-100 dark:bg-gray-700 rounded-md">
+                                                ✅ Call Completed
+                                            </div>
+                                        )}
+                                    </>
                                 )}
                                 
                                 {/* Show workflow ID if voice call was initiated */}
                                 {voiceWorkflowId && (
-                                    <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-md">
-                                        <p className="text-sm text-blue-800 dark:text-blue-200 font-mono break-all">
-                                            <strong>Workflow ID:</strong> {voiceWorkflowId}
-                                        </p>
-                                        <p className="text-xs text-blue-600 dark:text-blue-300 mt-2">
-                                            You can use this ID to track the call status in the Temporal UI.
-                                        </p>
+                                    <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border-2 border-blue-200 dark:border-blue-700">
+                                        <div className="flex items-start gap-3">
+                                            <span className="text-2xl">🔄</span>
+                                            <div className="flex-1">
+                                                <p className="text-sm font-semibold text-blue-800 dark:text-blue-200 mb-2">
+                                                    Active Workflow
+                                                </p>
+                                                <p className="text-xs text-blue-700 dark:text-blue-300 font-mono break-all bg-white dark:bg-gray-800 p-2 rounded">
+                                                    {voiceWorkflowId}
+                                                </p>
+                                                <p className="text-xs text-blue-600 dark:text-blue-400 mt-2">
+                                                    💡 Track this call in the <a href="http://localhost:8081" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-800">Temporal UI</a>
+                                                </p>
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
+                            </div>
+                            
+                            {/* Action buttons for call status view */}
+                            <div className="mt-4 text-center">
+                                <button
+                                    onClick={handleStartNewChat}
+                                    className="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 
+                                        text-white px-6 py-3 rounded-lg font-semibold
+                                        transition-all duration-300 transform hover:scale-105 shadow-md hover:shadow-lg"
+                                    disabled={!done}
+                                >
+                                    🎙️ Make Another Call
+                                </button>
                             </div>
                         </>
                     )}
                 </div>
             </div>
 
-            {/* Input area - only show in chat mode */}
-            {!voiceMode && (
-                <div className="fixed bottom-0 left-1/2 transform -translate-x-1/2 
-                    w-full max-w-lg bg-white dark:bg-gray-900 p-4
-                    border-t border-gray-300 dark:border-gray-700 shadow-lg
-                    transition-all duration-200"
-                    style={{ zIndex: 10 }}>
-                    <form onSubmit={(e) => {
-                        e.preventDefault();
-                        handleSendMessage();
-                    }} className="flex items-center">
-                        <input
-                            ref={inputRef}
-                            type="text"
-                            className={`flex-grow rounded-l px-3 py-2 border border-gray-300
-                                dark:bg-gray-700 dark:border-gray-600 focus:outline-none
-                                transition-opacity duration-200
-                                ${loading || done ? "opacity-50 cursor-not-allowed" : ""}`}
-                            placeholder="Type your message..."
-                            value={userInput}
-                            onChange={(e) => setUserInput(e.target.value)}
-                            disabled={loading || done}
-                            aria-label="Type your message"
-                        />
-                        <button
-                            type="submit"
-                            className={`bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-r 
-                                transition-all duration-200
-                                ${loading || done ? "opacity-50 cursor-not-allowed" : ""}`}
-                            disabled={loading || done}
-                            aria-label="Send message"
-                        >
-                            Send
-                        </button>
-                    </form>
-                    
-                    <div className="text-right mt-3">
-                        <button
-                            onClick={handleStartNewChat}
-                            className={`text-sm underline text-gray-600 dark:text-gray-400 
-                                hover:text-gray-800 dark:hover:text-gray-200 
-                                transition-all duration-200
-                                ${!done ? "opacity-0 cursor-not-allowed" : ""}`}
-                            disabled={!done}
-                            aria-label="Start new chat"
-                        >
-                            Start New Chat
-                        </button>
-                    </div>
-                </div>
-            )}
+            {/* Remove the chat input area entirely - Voice-only interface */}
         </div>
     );
 }
