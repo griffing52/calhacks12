@@ -1,15 +1,18 @@
 import asyncio
 import os
+import uuid
 from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from temporalio.api.enums.v1 import WorkflowExecutionStatus
 from temporalio.client import Client
 from temporalio.exceptions import TemporalError
 
 from goals import goal_list
+from goals.voice_agent import goal_voice_support
 from models.data_types import AgentGoalWorkflowParams, CombinedInput
 from shared.config import TEMPORAL_TASK_QUEUE, get_temporal_client
 from workflows.agent_goal_workflow import AgentGoalWorkflow
@@ -19,6 +22,27 @@ temporal_client: Optional[Client] = None
 
 # Load environment variables
 load_dotenv()
+
+
+# Request models
+class VoiceInitiateRequest(BaseModel):
+    """Request model for voice call initiation."""
+
+    phone_number: str = Field(
+        ...,
+        description="Phone number to call in E.164 format (e.g., +14155551234)",
+        example="+14155551234",
+    )
+    goal: str = Field(
+        ...,
+        description="The goal or reason for the call",
+        example="Reset password",
+    )
+    context: str = Field(
+        ...,
+        description="Additional context about the user's issue or request",
+        example="User is unable to log in to their account",
+    )
 
 
 def get_initial_agent_goal():
@@ -218,3 +242,73 @@ async def start_workflow():
     return {
         "message": f"Workflow started with goal's starter prompt: {initial_agent_goal.starter_prompt}."
     }
+
+
+@app.post("/api/v1/voice-initiate")
+async def voice_initiate(request: VoiceInitiateRequest):
+    """
+    Initiate a voice call workflow.
+
+    This endpoint starts a new AgentGoalWorkflow configured for voice support.
+    It creates a workflow with the voice agent goal and provides the phone number,
+    goal, and context as the initial user prompt.
+
+    Args:
+        request: VoiceInitiateRequest containing phone_number, goal, and context
+
+    Returns:
+        dict: Contains the workflow_id and status message
+
+    Raises:
+        HTTPException: If workflow creation fails
+    """
+    try:
+        # Generate a unique workflow ID for this voice call
+        workflow_id = f"voice-call-{uuid.uuid4()}"
+
+        # Create combined input with voice support goal
+        combined_input = CombinedInput(
+            tool_params=AgentGoalWorkflowParams(None, None),
+            agent_goal=goal_voice_support,
+        )
+
+        # Construct the initial prompt with all the information
+        # This prompt will guide the agent to collect any missing info and initiate the call
+        initial_prompt = (
+            f"Initiate voice call to {request.phone_number} "
+            f"with goal: {request.goal} "
+            f"and context: {request.context}"
+        )
+
+        # Start the workflow with the voice support goal and initial prompt
+        await temporal_client.start_workflow(
+            AgentGoalWorkflow.run,
+            combined_input,
+            id=workflow_id,
+            task_queue=TEMPORAL_TASK_QUEUE,
+            start_signal="user_prompt",
+            start_signal_args=[initial_prompt],
+        )
+
+        return {
+            "workflow_id": workflow_id,
+            "message": f"Voice call workflow initiated successfully",
+            "phone_number": request.phone_number,
+            "goal": request.goal,
+            "context": request.context,
+        }
+
+    except TemporalError as e:
+        error_message = str(e)
+        print(f"Temporal error while initiating voice call: {error_message}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to initiate voice call workflow: {error_message}",
+        )
+    except Exception as e:
+        error_message = str(e)
+        print(f"Unexpected error while initiating voice call: {error_message}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error: {error_message}",
+        )
