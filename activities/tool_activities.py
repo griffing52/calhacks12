@@ -59,14 +59,53 @@ class ToolActivities:
     @activity.defn
     async def agent_toolPlanner(self, input: ToolPromptInput) -> dict:
         """
-        DEPRECATED: This activity was part of the chat-based agent workflow.
-        The application now focuses on voice calling with LiveKit/Twilio.
-        Raising an error if called.
+        Simplified tool planner for voice-calling workflows.
+        Since we removed LiteLLM, this uses basic pattern matching
+        to determine if the user wants to initiate a voice call.
+        
+        For voice calling, the prompt should contain:
+        - "Initiate voice call to <phone>"
+        - "with goal: <goal>"  
+        - "and context: <context>"
         """
-        raise ApplicationError(
-            "agent_toolPlanner is not supported. This application focuses on voice calling with LiveKit/Twilio.",
-            type="NotSupported",
-        )
+        prompt = input.prompt.lower()
+        
+        # Check if this is a voice call initiation request
+        if "initiate voice call" in prompt:
+            # Extract phone number (looks for +1XXXXXXXXXX pattern)
+            import re
+            phone_match = re.search(r'\+\d{11}', input.prompt)
+            phone_number = phone_match.group(0) if phone_match else None
+            
+            # Extract goal (between "with goal:" and "and context:")
+            goal_match = re.search(r'with goal:\s*([^.]+?)(?:\s+and context:|$)', input.prompt, re.IGNORECASE)
+            goal = goal_match.group(1).strip() if goal_match else "Customer support"
+            
+            # Extract context (after "and context:")
+            context_match = re.search(r'and context:\s*(.+?)(?:\.|$)', input.prompt, re.IGNORECASE)
+            context = context_match.group(1).strip() if context_match else ""
+            
+            activity.logger.info(f"Parsed voice call request - Phone: {phone_number}, Goal: {goal}, Context: {context}")
+            
+            return {
+                "response": f"I'll initiate a voice call to {phone_number} to help with: {goal}",
+                "next": "confirm",
+                "tool": "InitiateVoiceCall",
+                "args": {
+                    "phone_number": phone_number,
+                    "goal": goal,
+                    "context": context,
+                    "userConfirmation": "yes"
+                }
+            }
+        
+        # Fallback for other requests
+        return {
+            "response": "I can help you with voice calling. Please provide your phone number and describe what you need help with.",
+            "next": "question",
+            "tool": None,
+            "args": {}
+        }
 
     @activity.defn
     async def get_wf_env_vars(self, input: EnvLookupInput) -> EnvLookupOutput:

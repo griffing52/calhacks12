@@ -69,13 +69,21 @@ async def main():
                 task_queue=TEMPORAL_TASK_QUEUE,
                 workflows=[AgentGoalWorkflow],
                 activities=[
-                    activities.agent_validatePrompt,
-                    activities.agent_toolPlanner,
+                    # Voice calling activities (core functionality)
+                    initiate_voice_call_activity,
+                    
+                    # Environment and MCP activities
                     activities.get_wf_env_vars,
                     activities.mcp_tool_activity,
-                    dynamic_tool_activity,
                     mcp_list_tools,
-                    initiate_voice_call_activity,
+                    
+                    # Dynamic tool activity for native tools
+                    dynamic_tool_activity,
+                    
+                    # Legacy chat-based agent activities (stubbed for compatibility)
+                    # These are needed by AgentGoalWorkflow but don't use LiteLLM anymore
+                    activities.agent_validatePrompt,
+                    activities.agent_toolPlanner,
                 ],
                 activity_executor=activity_executor,
             )

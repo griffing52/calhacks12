@@ -32,25 +32,48 @@ async function handleResponse(response) {
 }
 
 async function fetchWithTimeout(url, options = {}, timeout = REQUEST_TIMEOUT_MS) {
+    console.log('[fetchWithTimeout] Starting fetch to:', url);
+    console.log('[fetchWithTimeout] Timeout:', timeout, 'ms');
+    console.log('[fetchWithTimeout] Options:', options);
+    
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const startTime = Date.now();
+    const timeoutId = setTimeout(() => {
+        const elapsed = Date.now() - startTime;
+        console.error('[fetchWithTimeout] ⏰ TIMEOUT! Aborting after', elapsed, 'ms');
+        controller.abort();
+    }, timeout);
 
     try {
-        return await fetch(url, { ...options, signal: controller.signal });
+        console.log('[fetchWithTimeout] Calling fetch...');
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        const elapsed = Date.now() - startTime;
+        console.log('[fetchWithTimeout] ✓ Fetch completed in', elapsed, 'ms');
+        return response;
     } catch (error) {
+        const elapsed = Date.now() - startTime;
+        console.error('[fetchWithTimeout] ✗ Fetch error after', elapsed, 'ms');
+        console.error('[fetchWithTimeout] Error name:', error.name);
+        console.error('[fetchWithTimeout] Error:', error);
+        
         if (error.name === 'AbortError') {
+            console.error('[fetchWithTimeout] Request was aborted (timeout)');
             throw new ApiError('Request timed out', 408);
         }
         throw error;
     } finally {
         clearTimeout(timeoutId);
+        console.log('[fetchWithTimeout] Timeout cleared');
     }
 }
 
 export const apiService = {
-    async getConversationHistory() {
+    async getConversationHistory(workflowId = null) {
         try {
-            const res = await fetchWithTimeout(`${API_BASE_URL}/get-conversation-history`);
+            const url = workflowId 
+                ? `${API_BASE_URL}/get-conversation-history?workflow_id=${encodeURIComponent(workflowId)}`
+                : `${API_BASE_URL}/get-conversation-history`;
+            const res = await fetchWithTimeout(url);
             return handleResponse(res);
         } catch (error) {
             if (error instanceof ApiError) {
@@ -113,9 +136,12 @@ export const apiService = {
         }
     },
 
-    async confirm() {
+    async confirm(workflowId = null) {
         try {
-            const res = await fetchWithTimeout(`${API_BASE_URL}/confirm`, { 
+            const url = workflowId
+                ? `${API_BASE_URL}/confirm?workflow_id=${encodeURIComponent(workflowId)}`
+                : `${API_BASE_URL}/confirm`;
+            const res = await fetchWithTimeout(url, { 
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -134,6 +160,8 @@ export const apiService = {
     },
 
     async initiateVoiceCall({ phoneNumber, goal, context }) {
+        console.log('[initiateVoiceCall] Starting request with:', { phoneNumber, goal, context });
+        
         if (!phoneNumber?.trim()) {
             throw new ApiError('Phone number is required', 400);
         }
@@ -145,22 +173,47 @@ export const apiService = {
         }
 
         try {
+            console.log('[initiateVoiceCall] Validation passed, preparing request...');
+            const url = `${API_BASE_URL}/api/v1/voice-initiate`;
+            const payload = {
+                phone_number: phoneNumber,
+                goal: goal,
+                context: context
+            };
+            
+            console.log('[initiateVoiceCall] URL:', url);
+            console.log('[initiateVoiceCall] Payload:', payload);
+            console.log('[initiateVoiceCall] Timeout:', REQUEST_TIMEOUT_MS, 'ms');
+            console.log('[initiateVoiceCall] Sending fetch request...');
+            
+            const startTime = Date.now();
             const res = await fetchWithTimeout(
-                `${API_BASE_URL}/api/v1/voice-initiate`,
+                url,
                 { 
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        phone_number: phoneNumber,
-                        goal: goal,
-                        context: context
-                    })
+                    body: JSON.stringify(payload)
                 }
             );
-            return handleResponse(res);
+            const fetchTime = Date.now() - startTime;
+            console.log('[initiateVoiceCall] Fetch completed in', fetchTime, 'ms');
+            
+            console.log('[initiateVoiceCall] Response status:', res.status);
+            console.log('[initiateVoiceCall] Parsing response...');
+            
+            const result = await handleResponse(res);
+            console.log('[initiateVoiceCall] Success! Result:', result);
+            return result;
         } catch (error) {
+            const elapsed = Date.now();
+            console.error('[initiateVoiceCall] Error after', elapsed, 'ms');
+            console.error('[initiateVoiceCall] Error type:', error.name);
+            console.error('[initiateVoiceCall] Error message:', error.message);
+            console.error('[initiateVoiceCall] Error status:', error.status);
+            console.error('[initiateVoiceCall] Full error:', error);
+            
             if (error instanceof ApiError) {
                 throw error;
             }

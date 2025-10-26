@@ -109,7 +109,7 @@ export default function App() {
     
     const fetchConversationHistory = useCallback(async () => {
         try {
-            const data = await apiService.getConversationHistory();
+            const data = await apiService.getConversationHistory(voiceWorkflowId);
             const newConversation = data.messages || [];
             
             setConversation(prevConversation => 
@@ -139,7 +139,7 @@ export default function App() {
         } catch (err) {
             handleError(err, "fetching conversation");
         }
-    }, [handleError, clearErrorOnSuccess]);
+    }, [voiceWorkflowId, handleError, clearErrorOnSuccess]);
     
     // Setup polling with cleanup - Only poll when we have an active voice workflow
     useEffect(() => {
@@ -211,7 +211,7 @@ export default function App() {
         try {
             setLoading(true);
             setError(INITIAL_ERROR_STATE);
-            await apiService.confirm();
+            await apiService.confirm(voiceWorkflowId);
         } catch (err) {
             handleError(err, "confirming action");
             setLoading(false);

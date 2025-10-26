@@ -62,7 +62,10 @@ async def startup_event():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",  # Allow both localhost and 127.0.0.1
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -311,10 +314,16 @@ async def get_tool_data():
 
 
 @app.get("/get-conversation-history")
-async def get_conversation_history():
-    """Calls the workflow's 'get_conversation_history' query."""
+async def get_conversation_history(workflow_id: Optional[str] = None):
+    """Calls the workflow's 'get_conversation_history' query.
+    
+    Args:
+        workflow_id: Optional workflow ID. Defaults to 'agent-workflow' for backward compatibility.
+    """
     try:
-        handle = temporal_client.get_workflow_handle("agent-workflow")
+        # Use provided workflow_id or fall back to default
+        wf_id = workflow_id or "agent-workflow"
+        handle = temporal_client.get_workflow_handle(wf_id)
 
         failed_states = [
             WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_TERMINATED,
@@ -450,10 +459,14 @@ async def send_prompt(prompt: str):
 
 
 @app.post("/confirm")
-async def send_confirm():
-    """Sends a 'confirm' signal to the workflow."""
-    workflow_id = "agent-workflow"
-    handle = temporal_client.get_workflow_handle(workflow_id)
+async def send_confirm(workflow_id: Optional[str] = None):
+    """Sends a 'confirm' signal to the workflow.
+    
+    Args:
+        workflow_id: Optional workflow ID. Defaults to 'agent-workflow' for backward compatibility.
+    """
+    wf_id = workflow_id or "agent-workflow"
+    handle = temporal_client.get_workflow_handle(wf_id)
     await handle.signal("confirm")
     return {"message": "Confirm signal sent."}
 
@@ -553,15 +566,22 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
     Raises:
         HTTPException: If workflow creation fails
     """
+    import time
+    start_time = time.time()
+    print(f"[VOICE-INITIATE] Starting voice_initiate endpoint at {start_time}")
+    print(f"[VOICE-INITIATE] Request: phone={request.phone_number}, goal={request.goal}, context={request.context}")
+    
     try:
         # Generate a unique workflow ID for this voice call
         workflow_id = f"voice-call-{uuid.uuid4()}"
+        print(f"[VOICE-INITIATE] Generated workflow_id: {workflow_id} (elapsed: {time.time() - start_time:.3f}s)")
 
         # Create combined input with voice support goal
         combined_input = CombinedInput(
             tool_params=AgentGoalWorkflowParams(None, None),
             agent_goal=goal_voice_support,
         )
+        print(f"[VOICE-INITIATE] Created combined_input (elapsed: {time.time() - start_time:.3f}s)")
 
         # Construct the initial prompt with all the information
         # This prompt will guide the agent to collect any missing info and initiate the call
@@ -570,8 +590,10 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
             f"with goal: {request.goal} "
             f"and context: {request.context}"
         )
+        print(f"[VOICE-INITIATE] Constructed initial_prompt (elapsed: {time.time() - start_time:.3f}s)")
 
         # Start the workflow with the voice support goal and initial prompt
+        print(f"[VOICE-INITIATE] About to call temporal_client.start_workflow (elapsed: {time.time() - start_time:.3f}s)")
         await temporal_client.start_workflow(
             AgentGoalWorkflow.run,
             combined_input,
@@ -580,30 +602,36 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
             start_signal="user_prompt",
             start_signal_args=[initial_prompt],
         )
+        print(f"[VOICE-INITIATE] Workflow started successfully (elapsed: {time.time() - start_time:.3f}s)")
 
         # Add background task to poll for Call SID and store mapping
         # This allows the endpoint to return immediately while the Call SID
         # is retrieved asynchronously from the workflow
         background_tasks.add_task(poll_for_call_sid, workflow_id)
+        print(f"[VOICE-INITIATE] Added background task (elapsed: {time.time() - start_time:.3f}s)")
 
-        return {
+        response = {
             "workflow_id": workflow_id,
             "message": f"Voice call workflow initiated successfully",
             "phone_number": request.phone_number,
             "goal": request.goal,
             "context": request.context,
         }
+        print(f"[VOICE-INITIATE] Returning response (elapsed: {time.time() - start_time:.3f}s)")
+        return response
 
     except TemporalError as e:
+        elapsed = time.time() - start_time
         error_message = str(e)
-        print(f"Temporal error while initiating voice call: {error_message}")
+        print(f"[VOICE-INITIATE] ❌ TemporalError after {elapsed:.3f}s: {error_message}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to initiate voice call workflow: {error_message}",
         )
     except Exception as e:
+        elapsed = time.time() - start_time
         error_message = str(e)
-        print(f"Unexpected error while initiating voice call: {error_message}")
+        print(f"[VOICE-INITIATE] ❌ Unexpected error after {elapsed:.3f}s: {error_message}")
         raise HTTPException(
             status_code=500,
             detail=f"Unexpected error: {error_message}",
