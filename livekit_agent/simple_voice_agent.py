@@ -78,5 +78,7 @@ if __name__ == "__main__":
             entrypoint_fnc=entrypoint,
             # Register with a specific agent name so dispatch rules can target it
             agent_name="voice-assistant",
+            # Force agent to use same region as SIP trunk (US East)
+            ws_url=LIVEKIT_URL,
         )
     )

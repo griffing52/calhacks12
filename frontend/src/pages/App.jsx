@@ -245,40 +245,40 @@ export default function App() {
             setLoading(true);
             setError(INITIAL_ERROR_STATE);
             
+            console.log('[App] Initiating voice call...');
             const result = await apiService.initiateVoiceCall({
                 phoneNumber,
                 goal,
                 context
             });
 
+            console.log('[App] Voice call initiated:', result);
+            
             // Store workflow ID for status tracking
             setVoiceWorkflowId(result.workflow_id);
             
-            // Show success message in conversation
-            const successMessage = {
+            // Show initial status message
+            const statusMessage = {
                 actor: "system",
                 response: {
-                    response: `✅ Voice call initiated successfully!\n\n` +
-                        `📱 Calling: ${result.phone_number}\n` +
+                    response: `🚀 Voice call workflow initiated!\n\n` +
+                        `📱 Phone: ${result.phone_number}\n` +
                         `🎯 Goal: ${result.goal}\n` +
                         `📝 Context: ${result.context}\n\n` +
-                        `Workflow ID: ${result.workflow_id}\n\n` +
-                        `The voice assistant will call you shortly to help with your request.`,
+                        `Preparing to call you now...`,
                     next: "question"
                 }
             };
             
-            setConversation([successMessage]);
-            setLastMessage(successMessage);
+            setConversation([statusMessage]);
+            setLastMessage(statusMessage);
             
-            // Log workflow ID to console for debugging
-            console.log('Voice call workflow initiated:', result.workflow_id);
-            
-            // Switch back to chat view to show status
+            // Switch to status view
             setVoiceMode(false);
             setDone(false);
             
         } catch (err) {
+            console.error('[App] Voice call error:', err);
             handleError(err, "initiating voice call");
         } finally {
             setLoading(false);
@@ -346,6 +346,18 @@ export default function App() {
                                 onSubmit={handleVoiceCallSubmit}
                                 loading={loading}
                                 onCancel={handleCancelVoiceMode}
+                            />
+                        </div>
+                    ) : voiceWorkflowId ? (
+                        /* Show real-time call status when workflow is active */
+                        <div className="flex-grow flex items-center justify-center overflow-y-auto">
+                            <VoiceCallStatus
+                                workflowId={voiceWorkflowId}
+                                apiService={apiService}
+                                onClose={() => {
+                                    setVoiceWorkflowId(null);
+                                    setDone(true);
+                                }}
                             />
                         </div>
                     ) : (

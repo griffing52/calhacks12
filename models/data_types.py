@@ -37,7 +37,7 @@ class ValidationInput:
 @dataclass
 class ValidationResult:
     validationResult: bool
-    validationFailedReason: dict = None
+    validationFailedReason: Optional[dict] = None
 
     def __post_init__(self):
         # Initialize empty dict if None

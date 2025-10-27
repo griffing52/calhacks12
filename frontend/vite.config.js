@@ -6,5 +6,10 @@ export default defineConfig({
   server: {
     open: true,
     host: process.env.VITE_HOST ?? 'localhost',
+    hmr: {
+      protocol: 'ws',
+      host: 'localhost',
+      port: 5173,
+    },
   },
 });

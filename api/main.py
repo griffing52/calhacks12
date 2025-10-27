@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from temporalio.api.enums.v1 import WorkflowExecutionStatus
 from temporalio.client import Client
 from temporalio.exceptions import TemporalError
+from twilio.twiml.voice_response import VoiceResponse, Dial
 
 from goals import goal_list
 from goals.voice_agent import goal_voice_support
@@ -403,16 +404,6 @@ async def twilio_voice_twiml(
     try:
         print(f"[TwiML-SIP] Generating TwiML for Call SID: {CallSid}, From: {From}")
 
-        # LiveKit SIP URI - build a full SIP URI that includes the phone number
-        # Use TLS transport to improve compatibility (Twilio -> LiveKit often requires TLS)
-        # Format: sip:+<phone_number>@<subdomain>.sip.livekit.cloud;transport=tls
-        livekit_url = os.getenv("LIVEKIT_URL", "wss://wait-less-22pf77bb.livekit.cloud")
-        # Extract subdomain: "wss://wait-less-22pf77bb.livekit.cloud" -> "22pf77bb"
-        subdomain = (
-            livekit_url.split("-")[-1].split(".")[0]
-            if "livekit.cloud" in livekit_url
-            else "22pf77bb"
-        )
         twilio_phone = os.getenv("TWILIO_PHONE_NUMBER", "+13105825023")
 
         # LiveKit SIP URI from project settings
@@ -422,17 +413,15 @@ async def twilio_voice_twiml(
 
         print(f"[TwiML-SIP] Forwarding to LiveKit SIP URI: {livekit_sip_uri}")
 
-        # Generate TwiML to forward call to LiveKit SIP trunk
-        # Let LiveKit create the room automatically via dispatch rule
-        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Dial>
-        <Sip>{livekit_sip_uri}</Sip>
-    </Dial>
-</Response>"""
+        # Use Twilio VoiceResponse library for proper TwiML generation
+        response = VoiceResponse()
+        dial = Dial()
+        dial.sip(livekit_sip_uri)
+        response.append(dial)
 
+        twiml_str = str(response)
         print(f"[TwiML-SIP] TwiML generated successfully")
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml_str, media_type="application/xml")
 
     except Exception as e:
         print(f"[TwiML-SIP] Error generating TwiML: {e}")
@@ -440,14 +429,10 @@ async def twilio_voice_twiml(
         traceback.print_exc()
 
         # Fallback TwiML
-        return Response(
-            content="""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say>Sorry, an error occurred connecting to the assistant.</Say>
-    <Hangup/>
-</Response>""",
-            media_type="application/xml",
-        )
+        response = VoiceResponse()
+        response.say("Sorry, an error occurred connecting to the assistant.")
+        response.hangup()
+        return Response(content=str(response), media_type="application/xml")
 
 @app.post("/send-prompt")
 async def send_prompt(prompt: str):
@@ -642,4 +627,101 @@ async def voice_initiate(request: VoiceInitiateRequest, background_tasks: Backgr
         raise HTTPException(
             status_code=500,
             detail=f"Unexpected error: {error_message}",
+        )
+
+
+@app.get("/voice-call-status/{workflow_id}")
+async def get_voice_call_status(workflow_id: str):
+    """
+    Get the current status of a voice call workflow.
+    
+    Returns:
+    - status: Workflow execution status (RUNNING, COMPLETED, FAILED, etc.)
+    - conversation_history: Recent conversation messages
+    - call_sid: Twilio Call SID if available
+    - voice_status: Voice call specific status (active, pending questions, etc.)
+    """
+    try:
+        if not temporal_client:
+            raise HTTPException(status_code=503, detail="Temporal client not initialized")
+        
+        # Get workflow handle
+        handle = temporal_client.get_workflow_handle(workflow_id)
+        
+        # Get workflow description to check status
+        description = await handle.describe()
+        
+        # Query conversation history
+        try:
+            conversation_history = await handle.query(
+                AgentGoalWorkflow.get_conversation_history
+            )
+        except Exception as e:
+            print(f"[voice-call-status] Warning: Could not query conversation history: {e}")
+            conversation_history = []
+        
+        # Query voice call specific status
+        voice_status = None
+        try:
+            voice_status = await handle.query(
+                AgentGoalWorkflow.get_voice_call_status
+            )
+        except Exception as e:
+            print(f"[voice-call-status] Warning: Could not query voice call status: {e}")
+            voice_status = {
+                "active": False,
+                "call_sid": None,
+                "status": "unknown",
+                "info_needed": False,
+                "pending_question": None
+            }
+        
+        return {
+            "workflow_id": workflow_id,
+            "status": description.status.name,
+            "conversation_history": conversation_history,
+            "voice_status": voice_status,
+            "call_sid": voice_status.get("call_sid") if voice_status else None,
+            "run_id": description.run_id,
+            "start_time": description.start_time.isoformat() if description.start_time else None,
+        }
+    
+    except Exception as e:
+        print(f"[voice-call-status] Error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get voice call status: {str(e)}"
+        )
+
+
+
+
+@app.post("/voice-provide-answer/{workflow_id}")
+async def provide_voice_answer(workflow_id: str, answer: str = Form(...)):
+    """
+    Provide an answer to a question from the voice AI.
+    
+    This endpoint allows the UI to send answers back to the workflow
+    when the voice AI needs clarification during a call.
+    """
+    try:
+        if not temporal_client:
+            raise HTTPException(status_code=503, detail="Temporal client not initialized")
+        
+        handle = temporal_client.get_workflow_handle(workflow_id)
+        await handle.signal(AgentGoalWorkflow.voice_info_provided, answer)
+        
+        print(f"[voice-provide-answer] Sent answer to workflow {workflow_id}")
+        
+        return {
+            "status": "success",
+            "message": "Answer provided to voice assistant",
+            "workflow_id": workflow_id
+        }
+    
+    except Exception as e:
+        print(f"[voice-provide-answer] Error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to provide answer: {str(e)}"
         )
