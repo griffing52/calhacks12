@@ -1,4 +1,5 @@
 {
+    "name": "griffin",
     "dispatch_rule": {
         "rule": {
             "dispatchRuleIndividual": {
