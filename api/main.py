@@ -562,83 +562,115 @@ async def voice_provide_info(
 @app.post("/api/v1/voice-initiate")
 async def voice_initiate(request: VoiceInitiateRequest, background_tasks: BackgroundTasks):
     """
-    Initiate a voice call workflow.
+    Initiate a voice call using LiveKit Agent Dispatch.
 
-    This endpoint starts a new AgentGoalWorkflow configured for voice support.
-    It creates a workflow with the voice agent goal and provides the phone number,
-    goal, and context as the initial user prompt.
+    This endpoint directly creates a LiveKit agent dispatch to initiate an outbound call,
+    bypassing the need for a Temporal workflow for simple call initiation.
     
-    After starting the workflow, it polls in the background for the Call SID
-    and stores the mapping for webhook routing.
+    The LiveKit dispatch will:
+    1. Create a unique room for the call
+    2. Dispatch an agent to handle the conversation
+    3. Initiate the outbound call via SIP trunk
+    4. Pass goal and context metadata to the agent
 
     Args:
         request: VoiceInitiateRequest containing phone_number, goal, and context
-        background_tasks: FastAPI background tasks for async polling
 
     Returns:
-        dict: Contains the workflow_id and status message
+        dict: Contains the dispatch_id, room_name, and status message
 
     Raises:
-        HTTPException: If workflow creation fails
+        HTTPException: If dispatch creation fails
     """
     import time
     start_time = time.time()
    
     try:
-        # Generate a unique workflow ID for this voice call
-        workflow_id = f"voice-call-{uuid.uuid4()}"
-
-        # Create combined input with voice support goal
-        combined_input = CombinedInput(
-            tool_params=AgentGoalWorkflowParams(
-                conversation_summary=None,
-                prompt_queue=None
-            ),
-            agent_goal=goal_voice_support,
+        # Import LiveKit SDK
+        from livekit import api
+        import json
+        import random
+        import string
+        
+        # Get LiveKit configuration
+        livekit_url = os.getenv("LIVEKIT_URL")
+        livekit_api_key = os.getenv("LIVEKIT_API_KEY")
+        livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
+        agent_name = os.getenv("LIVEKIT_AGENT_NAME", "outbound-caller")
+        from_number = os.getenv("TWILIO_PHONE_NUMBER", "+13105825023")
+        
+        # Validate credentials
+        if not all([livekit_url, livekit_api_key, livekit_api_secret]):
+            raise HTTPException(
+                status_code=500,
+                detail="Missing LiveKit credentials in environment configuration"
+            )
+        
+        # Initialize LiveKit API client
+        lkapi = api.LiveKitAPI(
+            url=livekit_url,
+            api_key=livekit_api_key,
+            api_secret=livekit_api_secret,
         )
-
-        # Construct the initial prompt with all the information
-        # This prompt will guide the agent to collect any missing info and initiate the call
-        initial_prompt = (
-            f"Initiate voice call to {request.phone_number} "
-            f"with goal: {request.goal} "
-            f"and context: {request.context}"
+        
+        # Generate unique room name for this call
+        room_name = "call-" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        
+        # Build metadata for the dispatch
+        metadata = {
+            "phone_number": request.phone_number,          # Number calling FROM (shown to recipient)
+            "transfer_to": from_number,  # Number to call TO (recipient)
+            "goal": request.goal,
+            "context": request.context
+        }
+        
+        print(f"[LiveKit Dispatch] Creating dispatch:")
+        print(f"  Agent: {agent_name}")
+        print(f"  Room: {room_name}")
+        print(f"  To: {request.phone_number}")
+        print(f"  Goal: {request.goal}")
+        
+        # Create the agent dispatch - this initiates the call via LiveKit
+        dispatch = await lkapi.agent_dispatch.create_dispatch(
+            api.CreateAgentDispatchRequest(
+                agent_name=agent_name,
+                room=room_name,
+                metadata=json.dumps(metadata)
+            )
         )
-
-        # Start the workflow with the voice support goal and initial prompt
-        await temporal_client.start_workflow(
-            AgentGoalWorkflow.run,
-            combined_input,
-            id=workflow_id,
-            task_queue=TEMPORAL_TASK_QUEUE,
-            start_signal="user_prompt",
-            start_signal_args=[initial_prompt],
-        )
-
-        # Add background task to poll for Call SID and store mapping
-        # This allows the endpoint to return immediately while the Call SID
-        # is retrieved asynchronously from the workflow
-        background_tasks.add_task(poll_for_call_sid, workflow_id)
+        
+        await lkapi.aclose()
+        
+        print(f"[LiveKit Dispatch] Success! Dispatch ID: {dispatch.id}")
 
         response = {
-            "workflow_id": workflow_id,
-            "message": f"Voice call workflow initiated successfully",
+            "dispatch_id": dispatch.id,
+            "room_name": room_name,
+            "message": f"Voice call initiated successfully to {request.phone_number}",
             "phone_number": request.phone_number,
             "goal": request.goal,
             "context": request.context,
+            "agent_name": agent_name,
         }
         return response
 
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="LiveKit SDK not installed. Run: pip install livekit",
+        )
     except TemporalError as e:
         elapsed = time.time() - start_time
         error_message = str(e)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to initiate voice call workflow: {error_message}",
+            detail=f"Failed to initiate voice call: {error_message}",
         )
     except Exception as e:
         elapsed = time.time() - start_time
         error_message = str(e)
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Unexpected error: {error_message}",

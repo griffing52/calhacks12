@@ -1,6 +1,6 @@
 """
 Voice Activities for Temporal Workflows
-Handles voice call initiation via Twilio and LiveKit integration
+Handles voice call initiation via LiveKit Agent Dispatch
 """
 
 import os
@@ -16,7 +16,7 @@ load_dotenv(override=True)
 @activity.defn
 async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Temporal Activity to initiate a voice call using Twilio and LiveKit.
+    Temporal Activity to initiate a voice call using LiveKit Agent Dispatch.
     
     This activity is registered as a Temporal activity and can be called from workflows
     to initiate outbound voice calls for customer support.
@@ -31,17 +31,14 @@ async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Dictionary with call status and details:
         - status: "success" or "error"
-        - call_sid: Unique call identifier
+        - call_sid: Unique call identifier (dispatch ID)
         - message: Human-readable status message
-        - Additional metadata (phone_number, goal, context, etc.)
+        - Additional metadata (phone_number, goal, context, room_name, etc.)
     
     Note:
-        This is a STUB IMPLEMENTATION for demonstration purposes.
-        In production, this would use the Twilio SDK to make actual API calls.
-        The full Twilio/LiveKit integration requires:
-        1. Installing twilio SDK: pip install twilio
-        2. Setting environment variables (TWILIO_ACCOUNT_SID, etc.)
-        3. Implementing the actual API calls (see tools/initiate_voice_call.py)
+        Uses LiveKit Agent Dispatch to initiate calls via SIP.
+        Requires LiveKit credentials (LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL).
+        Falls back to STUB mode if credentials are not provided.
     """
     activity.logger.info(f"Voice call activity started with args: {args}")
     
@@ -67,20 +64,15 @@ async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
         }
     
     # Get credentials from environment
-    twilio_account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-    twilio_phone_number = os.getenv("TWILIO_PHONE_NUMBER")
     livekit_api_key = os.getenv("LIVEKIT_API_KEY")
     livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
     livekit_url = os.getenv("LIVEKIT_URL", "wss://your-livekit-server.com")
     
     # Check if we have all required credentials
     has_credentials = all([
-        twilio_account_sid,
-        twilio_auth_token,
-        twilio_phone_number,
         livekit_api_key,
-        livekit_api_secret
+        livekit_api_secret,
+        livekit_url
     ])
     
     if not has_credentials:
@@ -110,60 +102,83 @@ async def initiate_voice_call_activity(args: Dict[str, Any]) -> Dict[str, Any]:
             "note": "This is a stub implementation. Set TWILIO_* and LIVEKIT_* environment variables for production mode."
         }
     
-    # PRODUCTION MODE - Actual Twilio API integration
-    # NOTE: This requires the twilio package to be installed: pip install twilio
+    # PRODUCTION MODE - Actual LiveKit Agent Dispatch
+    # NOTE: This requires the livekit package to be installed: pip install livekit
     activity.logger.info(
-        f"Running in PRODUCTION mode. Initiating real call to {phone_number}"
+        f"Running in PRODUCTION mode. Initiating real call to {phone_number} via LiveKit"
     )
     
     try:
-        # Import Twilio SDK (only when credentials are available)
-        from twilio.rest import Client
+        # Import LiveKit SDK (only when credentials are available)
+        from livekit import api
+        import json
+        import random
+        import string
         
-        # Initialize Twilio client
-        client = Client(twilio_account_sid, twilio_auth_token)
-        
-        # Build webhook URLs
-        webhook_base_url = os.getenv("WEBHOOK_BASE_URL", "http://localhost:8000")
-        status_callback_url = f"{webhook_base_url}/webhooks/twilio/status"
-        twiml_url = f"{webhook_base_url}/webhooks/twilio/voice"
-        
-        activity.logger.info(f"Calling Twilio API with TwiML URL: {twiml_url}")
-        activity.logger.info(f"Status callback URL: {status_callback_url}")
-        
-        # Make the actual Twilio API call
-        call = client.calls.create(
-            to=phone_number,
-            from_=twilio_phone_number,
-            url=twiml_url,
-            method="POST",
-            status_callback=status_callback_url,
-            status_callback_event=["initiated", "ringing", "answered", "completed"],
-            status_callback_method="POST"
+        # Initialize LiveKit API client
+        lkapi = api.LiveKitAPI(
+            url=livekit_url,
+            api_key=livekit_api_key,
+            api_secret=livekit_api_secret,
         )
+        
+        # Generate unique room name for this call
+        room_name = "call-" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        
+        # Agent name from environment or default
+        agent_name = os.getenv("LIVEKIT_AGENT_NAME", "outbound-caller")
+        
+        # Transfer number (the phone to actually call)
+        from_number = phone_number
+        
+        # The phone number shown as caller (from environment)
+        transfer_to = os.getenv("TWILIO_PHONE_NUMBER", "+13105825023")
+        
+        # Build metadata for the dispatch
+        metadata = {
+            "phone_number": from_number,  # The number calling FROM
+            "transfer_to": transfer_to,    # The number to call TO
+            "goal": goal,
+            "context": context
+        }
+        
+        activity.logger.info(f"Creating LiveKit dispatch with agent: {agent_name}, room: {room_name}")
+        activity.logger.info(f"Metadata: {metadata}")
+        
+        # Create the agent dispatch - this initiates the call via LiveKit
+        dispatch = await lkapi.agent_dispatch.create_dispatch(
+            api.CreateAgentDispatchRequest(
+                agent_name=agent_name,
+                room=room_name,
+                metadata=json.dumps(metadata)
+            )
+        )
+        
+        await lkapi.aclose()
         
         activity.logger.info(
-            f"Successfully initiated call. Call SID: {call.sid}, Status: {call.status}"
+            f"Successfully created dispatch. Dispatch ID: {dispatch.id}, Room: {room_name}"
         )
         
-        # Return Call SID immediately so workflow can track it
+        # Return dispatch ID as call_sid for tracking
         return {
             "status": "success",
-            "call_sid": call.sid,  # Important!
+            "call_sid": dispatch.id,  # Important! Use dispatch ID as identifier
             "message": f"Voice call initiated to {phone_number}",
             "phone_number": phone_number,
             "goal": goal,
             "context": context,
-            "call_status": call.status,
+            "room_name": room_name,
+            "dispatch_id": dispatch.id,
+            "agent_name": agent_name,
             "mode": "production",
-            "twilio_account_sid": twilio_account_sid[-4:],  # Last 4 chars for verification
         }
         
     except ImportError as e:
-        activity.logger.error("Twilio SDK not installed")
+        activity.logger.error("LiveKit SDK not installed")
         return {
             "status": "error",
-            "error": "Twilio SDK not installed. Run: pip install twilio",
+            "error": "LiveKit SDK not installed. Run: pip install livekit",
             "message": "Failed to initiate call: missing dependencies"
         }
     except Exception as e:

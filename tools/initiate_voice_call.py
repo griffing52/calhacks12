@@ -1,5 +1,5 @@
 """
-Voice call initiation tool using Twilio and LiveKit.
+Voice call initiation tool using LiveKit Agent Dispatch.
 This tool initiates an outbound voice call to assist with customer support.
 
 This is a synchronous wrapper around the Temporal activity for compatibility
@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 def initiate_voice_call(args: Dict) -> Dict:
     """
-    Initiate a voice call using Twilio and LiveKit.
+    Initiate a voice call using LiveKit Agent Dispatch.
     
     This function serves as a synchronous wrapper that is called by the
     dynamic_tool_activity. The actual implementation is in activities/voice_activities.py
@@ -30,7 +30,7 @@ def initiate_voice_call(args: Dict) -> Dict:
     Returns:
         Dictionary containing:
             - status: str - "success" or "error"
-            - call_sid: str - Unique identifier for the call (Twilio Call SID)
+            - call_sid: str - Unique identifier for the call (dispatch ID)
             - message: str - Human-readable status message
             - error: str - Error message if status is "error"
     
@@ -58,21 +58,16 @@ def initiate_voice_call(args: Dict) -> Dict:
             "message": "Failed to initiate call: missing goal"
         }
     
-    # Get Twilio and LiveKit credentials from environment
-    twilio_account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-    twilio_phone_number = os.getenv("TWILIO_PHONE_NUMBER")
+    # Get LiveKit credentials from environment
     livekit_api_key = os.getenv("LIVEKIT_API_KEY")
     livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
     livekit_url = os.getenv("LIVEKIT_URL", "wss://your-livekit-server.com")
     
     # Check if we're in mock mode (no credentials provided)
     use_mock = not all([
-        twilio_account_sid,
-        twilio_auth_token,
-        twilio_phone_number,
         livekit_api_key,
-        livekit_api_secret
+        livekit_api_secret,
+        livekit_url
     ])
     
     if use_mock:
@@ -92,55 +87,72 @@ def initiate_voice_call(args: Dict) -> Dict:
             "mode": "mock"
         }
     
-    # Real implementation with Twilio and LiveKit
+    # Real implementation with LiveKit dispatch
     try:
-        from twilio.rest import Client
+        from livekit import api
+        import json
+        import asyncio
         
-        # Initialize Twilio client
-        client = Client(twilio_account_sid, twilio_auth_token)
-        
-        # Create TwiML webhook URL that will handle the call
-        # This should point to your server endpoint that serves TwiML
-        # The endpoint will receive the goal and context as query parameters
-        webhook_base_url = os.getenv(
-            "WEBHOOK_BASE_URL",
-            "https://your-server.com/voice/twiml"
+        # Initialize LiveKit API client
+        lkapi = api.LiveKitAPI(
+            url=livekit_url,
+            api_key=livekit_api_key,
+            api_secret=livekit_api_secret,
         )
         
-        # Encode goal and context in the webhook URL
-        import urllib.parse
-        query_params = urllib.parse.urlencode({
+        # Generate unique room name for this call
+        import random
+        import string
+        room_name = "call-" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        
+        # Agent name from environment or default
+        agent_name = os.getenv("LIVEKIT_AGENT_NAME", "outbound-caller")
+        
+        # Transfer number (the phone to actually call)
+        from_number = phone_number
+        
+        # The phone number shown as caller (from environment)
+        transfer_to = os.getenv("TWILIO_PHONE_NUMBER", "+13105825023")
+        
+        # Build metadata for the dispatch
+        metadata = {
+            "phone_number": from_number,  # The number calling FROM
+            "transfer_to": transfer_to,    # The number to call TO
             "goal": goal,
-            "context": context,
-            "livekit_url": livekit_url,
-            "livekit_api_key": livekit_api_key
-        })
-        twiml_url = f"{webhook_base_url}/webhooks/twilio/voice?{query_params}"
+            "context": context
+        }
         
-        # Initiate the outbound call
-        call = client.calls.create(
-            to=phone_number,
-            from_=twilio_phone_number,
-            url=twiml_url,
-            method="POST",
-            status_callback=os.getenv("VOICE_STATUS_CALLBACK_URL"),
-            status_callback_event=["initiated", "ringing", "answered", "completed"]
-        )
+        # Create the agent dispatch - this initiates the call via LiveKit
+        async def create_dispatch():
+            dispatch = await lkapi.agent_dispatch.create_dispatch(
+                api.CreateAgentDispatchRequest(
+                    agent_name=agent_name,
+                    room=room_name,
+                    metadata=json.dumps(metadata)
+                )
+            )
+            await lkapi.aclose()
+            return dispatch
+        
+        # Run the async dispatch creation
+        dispatch = asyncio.run(create_dispatch())
         
         return {
             "status": "success",
-            "call_sid": call.sid,
+            "call_sid": dispatch.id,  # Use dispatch ID as call identifier
             "message": f"Voice call initiated successfully to {phone_number}",
             "phone_number": phone_number,
             "goal": goal,
             "context": context,
-            "call_status": call.status
+            "room_name": room_name,
+            "dispatch_id": dispatch.id,
+            "agent_name": agent_name
         }
         
     except ImportError:
         return {
             "status": "error",
-            "error": "Twilio SDK not installed. Run: pip install twilio",
+            "error": "LiveKit SDK not installed. Run: pip install livekit",
             "message": "Failed to initiate call: missing dependencies"
         }
     except Exception as e:
